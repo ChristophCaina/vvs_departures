@@ -1,0 +1,12 @@
+{
+  "domain": "vvs_departures",
+  "name": "VVS Departures",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/yourusername/ha-vvs-departures",
+  "issue_tracker": "https://github.com/yourusername/ha-vvs-departures/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": [],
+  "iot_class": "cloud_polling"
+}
