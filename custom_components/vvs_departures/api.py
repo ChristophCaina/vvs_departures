@@ -10,7 +10,6 @@ import aiohttp
 
 from .const import (
     EFA_DM_URL,
-    EFA_SERVINGLINES_URL,
     EFA_STOPFINDER_URL,
 )
 
@@ -194,50 +193,56 @@ class VVSApiClient:
         return results
 
     async def get_serving_lines(self, stop_id: str) -> list[dict]:
-        """Fetch lines serving a stop. Returns list of {global_id, name, destination}."""
-        params = {
-            "language": "de",
-            "outputFormat": "rapidJSON",
-            "type_dm": "stopID",
-            "nameInfo_dm": stop_id,
-            "deleteAssignedStopps_dm": "1",
-            "mode": "odv",
-            "locationServerActive": "1",
-        }
+        """
+        Derive serving lines from a real departure fetch (limit=30).
+        More reliable than XML_SERVINGLINES_REQUEST which has inconsistent
+        parameter handling across different stop types.
+        """
         try:
-            async with self._session.get(
-                EFA_SERVINGLINES_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json(content_type=None)
+            result = await self.get_departures(stop_id, limit=30, line_filter=None)
         except Exception as exc:
-            _LOGGER.error("Serving lines fetch failed: %s", exc)
+            _LOGGER.error("Serving lines fetch failed for stop %s: %s", stop_id, exc)
             return []
 
-        lines = []
         seen: set[str] = set()
-        for line in data.get("lines", []):
-            transport = line.get("transportation", {})
-            global_id = transport.get("globalId", "")
-            name = transport.get("disassembledName") or transport.get("number", "")
-            dest = transport.get("destination", {}).get("name", "")
+        lines = []
 
+        for dep in result.get("departures", []):
+            global_id = dep.get("global_id", "")
             if not global_id or global_id in seen:
                 continue
             seen.add(global_id)
+
+            name = dep.get("line", "")
+            dest = dep.get("destination", "")
+            line_full = dep.get("line_full", name)
+
+            # Build a readable label e.g. "S1 (S-Bahn) → Plochingen"
+            type_part = line_full.replace(name, "").strip() if line_full != name else ""
+            label = f"{name} ({type_part}) → {dest}" if type_part else f"{name} → {dest}"
 
             lines.append(
                 {
                     "global_id": global_id,
                     "name": name,
+                    "line_full": line_full,
                     "destination": dest,
-                    "label": f"{name} → {dest}" if dest else name,
+                    "label": label,
                 }
             )
 
-        lines.sort(key=lambda l: l["name"])
+        # Sort: S-Bahn first, then U/Stadtbahn, then MEX/RE/RB, then Bus
+        def sort_key(l: dict) -> tuple:
+            n = l["name"]
+            if n.startswith("S") and (len(n) <= 3 or n[1:].isdigit()):
+                return (0, n.zfill(5))
+            if n.startswith("U"):
+                return (1, n.zfill(5))
+            if any(n.startswith(p) for p in ("MEX", "RE", "RB", "IC", "EC")):
+                return (2, n)
+            return (3, n.zfill(5))
+
+        lines.sort(key=sort_key)
         return lines
 
     async def get_departures(
