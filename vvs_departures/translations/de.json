@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Haltestelle suchen",
+        "description": "Gib den Namen der Haltestelle ein (z.B. Renningen oder Stuttgart Hbf).",
+        "data": {
+          "stop_search": "Haltestelle suchen"
+        }
+      },
+      "select_stop": {
+        "title": "Haltestelle auswählen",
+        "description": "{count} Treffer gefunden. Bitte wähle die gewünschte Haltestelle:",
+        "data": {
+          "stop_id": "Haltestelle"
+        }
+      },
+      "select_lines": {
+        "title": "Linien auswählen",
+        "description": "Wähle die Linien, die überwacht werden sollen. Wähle 'Alle Linien' für keinen Filter.\n\nHaltestelle: **{stop_name}**",
+        "data": {
+          "line_filter": "Linien"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zur EFA-API fehlgeschlagen.",
+      "no_results": "Keine Haltestellen gefunden. Bitte anderen Suchbegriff versuchen.",
+      "empty_query": "Bitte einen Suchbegriff eingeben.",
+      "invalid_stop": "Ungültige Haltestelle ausgewählt."
+    },
+    "abort": {
+      "already_configured": "Diese Haltestelle ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen",
+        "data": {
+          "departure_count": "Anzahl Abfahrten (1–10)",
+          "update_interval": "Aktualisierungsintervall in Sekunden (30–300)",
+          "line_filter": "Linien (Mehrfachauswahl)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "disruptions": {
+        "name": "Störungsmeldungen",
+        "state": {
+          "0": "Keine Meldungen"
+        }
+      }
+    }
+  }
+}
