@@ -212,20 +212,54 @@ class VVSApiClient:
 
     async def get_serving_lines(self, stop_id: str) -> list[dict]:
         """
-        Derive serving lines from a real departure fetch (limit=30).
-        More reliable than XML_SERVINGLINES_REQUEST which has inconsistent
-        parameter handling across different stop types.
+        Derive serving lines by fetching departures across multiple time windows.
+        This catches infrequent lines (e.g. S60) that may not appear in a single
+        30-departure snapshot.
         """
-        try:
-            result = await self.get_departures(stop_id, limit=30, line_filter=None)
-        except Exception as exc:
-            _LOGGER.error("Serving lines fetch failed for stop %s: %s", stop_id, exc)
-            return []
+        import asyncio as _asyncio
+        from datetime import datetime, timezone, timedelta
+
+        all_departures: list[dict] = []
+
+        # Fetch departures now + in 2h + in 4h to catch infrequent lines
+        offsets_minutes = [0, 120, 240]
+        fetch_tasks = []
+
+        async def _fetch_at_offset(offset_min: int) -> list[dict]:
+            params = {
+                "language": "de",
+                "outputFormat": "rapidJSON",
+                "typeInfo_dm": "stopID",
+                "nameInfo_dm": stop_id,
+                "deleteAssignedStopps_dm": "1",
+                "useRealtime": "0",  # no realtime needed for line discovery
+                "mode": "direct",
+                "limit": "30",
+                "version": "10.5.17.3",
+            }
+            if offset_min > 0:
+                target = datetime.now(tz=timezone.utc) + timedelta(minutes=offset_min)
+                params["itdDate"] = target.strftime("%Y%m%d")
+                params["itdTime"] = target.strftime("%H%M")
+            try:
+                async with self._session.get(
+                    EFA_DM_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json(content_type=None)
+                    return [_parse_departure(e) for e in data.get("stopEvents", []) if _parse_departure(e)]
+            except Exception as exc:
+                _LOGGER.debug("Serving lines fetch at offset %d failed: %s", offset_min, exc)
+                return []
+
+        results = await _asyncio.gather(*[_fetch_at_offset(o) for o in offsets_minutes])
+        for r in results:
+            all_departures.extend(r)
 
         seen: set[str] = set()
         lines = []
 
-        for dep in result.get("departures", []):
+        for dep in all_departures:
             name = dep.get("line", "")
             global_id = dep.get("global_id", "")
             dedup_key = global_id if global_id else name
