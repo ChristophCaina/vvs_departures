@@ -59,8 +59,14 @@ class VVSDeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from EFA API."""
         try:
-            # Request more than needed so filtering still yields enough results
-            fetch_limit = max(self._departure_count * 3, 15)
+            # When a line filter is active, fetch many more raw departures so
+            # that after filtering enough remain to fill all slots.
+            # At a busy hub like Stuttgart Hbf, 15 raw departures may all be
+            # other lines; 60 gives a comfortable margin.
+            if self._line_filter:
+                fetch_limit = max(self._departure_count * 10, 60)
+            else:
+                fetch_limit = max(self._departure_count * 3, 15)
             result = await self._client.get_departures(
                 stop_id=self._stop_id,
                 limit=fetch_limit,
