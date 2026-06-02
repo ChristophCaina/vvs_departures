@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -82,6 +82,7 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
 
     _attr_icon = "mdi:train"
     _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(
         self,
@@ -132,32 +133,18 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
         return None
 
     @property
-    def native_value(self) -> str:
-        """State: 'in X Min' or 'HH:MM' or 'Keine Daten'."""
+    def native_value(self) -> datetime | None:
+        """State: datetime of estimated departure (device_class=timestamp)."""
         dep = self._departure
         if dep is None:
-            return "Keine Daten"
-
+            return None
         estimated_str = dep.get("estimated") or dep.get("planned")
         if not estimated_str:
-            return "Keine Daten"
-
+            return None
         try:
-            est_dt = datetime.fromisoformat(estimated_str.replace("Z", "+00:00"))
-            now = datetime.now(tz=timezone.utc)
-            minutes = int((est_dt - now).total_seconds() // 60)
-
-            if minutes < 0:
-                return "Verpasst"
-            if minutes == 0:
-                return "Jetzt"
-            if minutes <= 60:
-                return f"in {minutes} Min"
-            # Show clock time for departures > 60 min away
-            local_time = est_dt.astimezone()
-            return local_time.strftime("%H:%M")
+            return datetime.fromisoformat(estimated_str.replace("Z", "+00:00"))
         except Exception:
-            return "Keine Daten"
+            return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
