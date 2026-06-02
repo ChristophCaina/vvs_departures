@@ -198,28 +198,70 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
     """Handle options for an existing VVS Departures entry."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        # Store entry_id only; access full entry via self.config_entry (HA injects it)
         self._entry_id = config_entry.entry_id
         self._available_lines: list[dict] = []
+
+    def _lines_from_coordinator(self) -> list[dict]:
+        """Extract unique lines from the coordinator's current data."""
+        from .const import DOMAIN
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry_id)
+        if not coordinator or not coordinator.data:
+            return []
+
+        seen: set[str] = set()
+        lines = []
+        for dep in coordinator.data.get("departures", []):
+            global_id = dep.get("global_id", "")
+            if not global_id or global_id in seen:
+                continue
+            seen.add(global_id)
+            name = dep.get("line", "")
+            dest = dep.get("destination", "")
+            line_full = dep.get("line_full", name)
+            type_part = line_full.replace(name, "").strip() if line_full != name else ""
+            label = f"{name} ({type_part}) → {dest}" if type_part else f"{name} → {dest}"
+            lines.append({
+                "global_id": global_id,
+                "name": name,
+                "label": label,
+            })
+
+        def sort_key(l: dict) -> tuple:
+            n = l["name"]
+            if n.startswith("S") and (len(n) <= 3 or n[1:].isdigit()):
+                return (0, n.zfill(5))
+            if n.startswith("U"):
+                return (1, n.zfill(5))
+            if any(n.startswith(p) for p in ("MEX", "RE", "RB", "IC", "EC")):
+                return (2, n)
+            return (3, n.zfill(5))
+
+        lines.sort(key=sort_key)
+        return lines
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Manage options: departure count, update interval, line filter."""
-        # Merge data + options so we always have all keys
         current_data = {**self.config_entry.data, **self.config_entry.options}
-        stop_id: str = current_data[CONF_STOP_ID]
         current_line_filter: list[str] = current_data.get(CONF_LINE_FILTER, [])
 
-        # Load available lines on first call
+        # Get lines from coordinator data (no extra API call needed)
         if not self._available_lines:
-            session = async_get_clientsession(self.hass)
-            client = VVSApiClient(session)
-            try:
-                self._available_lines = await client.get_serving_lines(stop_id)
-            except Exception:
-                _LOGGER.warning("Could not reload serving lines for %s", stop_id)
-                self._available_lines = []
+            self._available_lines = self._lines_from_coordinator()
+            # Fallback: API call if coordinator has no data yet
+            if not self._available_lines:
+                stop_id: str = current_data[CONF_STOP_ID]
+                session = async_get_clientsession(self.hass)
+                client = VVSApiClient(session)
+                try:
+                    self._available_lines = await client.get_serving_lines(stop_id)
+                    _LOGGER.debug("Loaded %d lines via API fallback for %s", len(self._available_lines), stop_id)
+                except Exception as exc:
+                    _LOGGER.warning("Could not load lines for options flow: %s", exc)
+                    self._available_lines = []
+
+        _LOGGER.debug("Options flow: %d lines available", len(self._available_lines))
 
         current_line_selection = current_line_filter if current_line_filter else [ALL_LINES_KEY]
 
