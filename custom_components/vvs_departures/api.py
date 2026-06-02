@@ -224,12 +224,13 @@ class VVSApiClient:
         lines = []
 
         for dep in result.get("departures", []):
-            global_id = dep.get("global_id", "")
-            if not global_id or global_id in seen:
-                continue
-            seen.add(global_id)
-
             name = dep.get("line", "")
+            global_id = dep.get("global_id", "")
+            dedup_key = global_id if global_id else name
+            if not dedup_key or dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
             dest = dep.get("destination", "")
             line_full = dep.get("line_full", name)
 
@@ -239,7 +240,7 @@ class VVSApiClient:
 
             lines.append(
                 {
-                    "global_id": global_id,
+                    "global_id": dedup_key,
                     "name": name,
                     "line_full": line_full,
                     "destination": dest,

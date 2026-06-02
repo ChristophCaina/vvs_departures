@@ -232,17 +232,20 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
         seen: set[str] = set()
         lines = []
         for dep in coordinator.data.get("departures", []):
-            global_id = dep.get("global_id", "")
-            if not global_id or global_id in seen:
-                continue
-            seen.add(global_id)
             name = dep.get("line", "")
+            global_id = dep.get("global_id", "")
+            # Use line name as dedup key if global_id is empty
+            dedup_key = global_id if global_id else name
+            if not dedup_key or dedup_key in seen:
+                continue
+            seen.add(dedup_key)
             dest = dep.get("destination", "")
             line_full = dep.get("line_full", name)
             type_part = line_full.replace(name, "").strip() if line_full != name else ""
             label = f"{name} ({type_part}) → {dest}" if type_part else f"{name} → {dest}"
+            _LOGGER.debug("Found line: %s (global_id=%s, key=%s)", name, global_id, dedup_key)
             lines.append({
-                "global_id": global_id,
+                "global_id": dedup_key,
                 "name": name,
                 "label": label,
             })
