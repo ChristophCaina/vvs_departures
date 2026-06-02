@@ -97,7 +97,19 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
         self._stop_name = stop_name
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_departure_{index}"
-        self._attr_name = f"Abfahrt {index + 1}"
+        self._fallback_name = f"Abfahrt {index + 1}"
+
+    @property
+    def name(self) -> str:
+        """Dynamic name: 'S6 → Weil der Stadt' or fallback 'Abfahrt N'."""
+        dep = self._departure
+        if dep is None:
+            return self._fallback_name
+        line = dep.get("line", "")
+        dest = dep.get("destination", "")
+        if line and dest:
+            return f"{line} → {dest}"
+        return self._fallback_name
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -121,11 +133,31 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
 
     @property
     def native_value(self) -> str:
-        """State: destination name, or 'Keine Daten'."""
+        """State: 'in X Min' or 'HH:MM' or 'Keine Daten'."""
         dep = self._departure
         if dep is None:
             return "Keine Daten"
-        return dep["destination"]
+
+        estimated_str = dep.get("estimated") or dep.get("planned")
+        if not estimated_str:
+            return "Keine Daten"
+
+        try:
+            est_dt = datetime.fromisoformat(estimated_str.replace("Z", "+00:00"))
+            now = datetime.now(tz=timezone.utc)
+            minutes = int((est_dt - now).total_seconds() // 60)
+
+            if minutes < 0:
+                return "Verpasst"
+            if minutes == 0:
+                return "Jetzt"
+            if minutes <= 60:
+                return f"in {minutes} Min"
+            # Show clock time for departures > 60 min away
+            local_time = est_dt.astimezone()
+            return local_time.strftime("%H:%M")
+        except Exception:
+            return "Keine Daten"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
