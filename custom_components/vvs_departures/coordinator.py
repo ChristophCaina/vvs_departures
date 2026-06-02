@@ -12,9 +12,13 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import VVSApiClient
 from .const import (
     CONF_DEPARTURE_COUNT,
+    CONF_DISRUPTION_PRIORITIES,
+    CONF_DISRUPTION_TYPES,
     CONF_LINE_FILTER,
     CONF_STOP_ID,
     DEFAULT_DEPARTURE_COUNT,
+    DEFAULT_DISRUPTION_PRIORITIES,
+    DEFAULT_DISRUPTION_TYPES,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
@@ -38,6 +42,12 @@ class VVSDeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._departure_count: int = config_entry_data.get(
             CONF_DEPARTURE_COUNT, DEFAULT_DEPARTURE_COUNT
         )
+        self._priority_filter: list[str] = config_entry_data.get(
+            CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES
+        )
+        self._type_filter: list[str] = config_entry_data.get(
+            CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES
+        )
 
         super().__init__(
             hass,
@@ -55,6 +65,8 @@ class VVSDeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 stop_id=self._stop_id,
                 limit=fetch_limit,
                 line_filter=self._line_filter if self._line_filter else None,
+                priority_filter=self._priority_filter if self._priority_filter else None,
+                type_filter=self._type_filter if self._type_filter else None,
             )
         except Exception as exc:
             raise UpdateFailed(f"Error communicating with EFA API: {exc}") from exc

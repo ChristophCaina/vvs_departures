@@ -25,3 +25,15 @@ DEFAULT_DISRUPTION_INTERVAL = 3600 # seconds
 # Coordinator keys
 COORDINATOR_DEPARTURES = "departures"
 COORDINATOR_DISRUPTIONS = "disruptions"
+
+# Disruption filter config keys
+CONF_DISRUPTION_PRIORITIES = "disruption_priorities"
+CONF_DISRUPTION_TYPES = "disruption_types"
+
+# Available values
+DISRUPTION_PRIORITY_OPTIONS = ["veryHigh", "high", "normal", "low"]
+DISRUPTION_TYPE_OPTIONS = ["lineInfo", "stationInfo", "stopInfo", "network"]
+
+# Defaults
+DEFAULT_DISRUPTION_PRIORITIES = ["veryHigh", "high"]
+DEFAULT_DISRUPTION_TYPES = ["lineInfo", "stationInfo", "stopInfo", "network"]

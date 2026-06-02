@@ -40,7 +40,9 @@
         "data": {
           "departure_count": "Number of departures (1–10)",
           "update_interval": "Update interval in seconds (30–300)",
-          "line_filter": "Lines (multi-select)"
+          "line_filter": "Lines (multi-select)",
+          "disruption_priorities": "Disruptions: priorities",
+          "disruption_types": "Disruptions: types"
         }
       }
     }

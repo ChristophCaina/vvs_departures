@@ -21,12 +21,18 @@ from homeassistant.helpers.selector import (
 from .api import VVSApiClient
 from .const import (
     CONF_DEPARTURE_COUNT,
+    CONF_DISRUPTION_PRIORITIES,
+    CONF_DISRUPTION_TYPES,
     CONF_LINE_FILTER,
     CONF_STOP_ID,
     CONF_STOP_NAME,
     CONF_UPDATE_INTERVAL,
     DEFAULT_DEPARTURE_COUNT,
+    DEFAULT_DISRUPTION_PRIORITIES,
+    DEFAULT_DISRUPTION_TYPES,
     DEFAULT_UPDATE_INTERVAL,
+    DISRUPTION_PRIORITY_OPTIONS,
+    DISRUPTION_TYPE_OPTIONS,
     DOMAIN,
 )
 
@@ -204,9 +210,24 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
     def _lines_from_coordinator(self) -> list[dict]:
         """Extract unique lines from the coordinator's current data."""
         from .const import DOMAIN
-        coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry_id)
-        if not coordinator or not coordinator.data:
+        domain_data = self.hass.data.get(DOMAIN, {})
+        _LOGGER.debug(
+            "Coordinator lookup: entry_id=%s, available_keys=%s",
+            self._entry_id,
+            list(domain_data.keys()),
+        )
+        coordinator = domain_data.get(self._entry_id)
+        if not coordinator:
+            _LOGGER.debug("Coordinator not found for entry_id=%s", self._entry_id)
             return []
+        if not coordinator.data:
+            _LOGGER.debug("Coordinator found but data is empty")
+            return []
+        _LOGGER.debug(
+            "Coordinator data: %d departures, %d disruptions",
+            len(coordinator.data.get("departures", [])),
+            len(coordinator.data.get("disruptions", [])),
+        )
 
         seen: set[str] = set()
         lines = []
@@ -278,8 +299,39 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
                     CONF_DEPARTURE_COUNT: int(user_input[CONF_DEPARTURE_COUNT]),
                     CONF_UPDATE_INTERVAL: int(user_input[CONF_UPDATE_INTERVAL]),
                     CONF_LINE_FILTER: line_filter,
+                    CONF_DISRUPTION_PRIORITIES: user_input.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES),
+                    CONF_DISRUPTION_TYPES: user_input.get(CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES),
                 },
             )
+
+        # Build priority selector
+        priority_options = [
+            SelectOptionDict(value="veryHigh", label="Sehr hoch (veryHigh)"),
+            SelectOptionDict(value="high", label="Hoch (high)"),
+            SelectOptionDict(value="normal", label="Normal"),
+            SelectOptionDict(value="low", label="Niedrig (low)"),
+        ]
+        priority_selector = SelectSelector(SelectSelectorConfig(
+            options=priority_options,
+            multiple=True,
+            mode=SelectSelectorMode.LIST,
+        ))
+
+        # Build type selector
+        type_options = [
+            SelectOptionDict(value="lineInfo", label="Linieninfo (Störungen, Bauarbeiten)"),
+            SelectOptionDict(value="stationInfo", label="Haltestelleninfo"),
+            SelectOptionDict(value="stopInfo", label="Stopinfo"),
+            SelectOptionDict(value="network", label="Netzweit"),
+        ]
+        type_selector = SelectSelector(SelectSelectorConfig(
+            options=type_options,
+            multiple=True,
+            mode=SelectSelectorMode.LIST,
+        ))
+
+        current_priorities = current_data.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES)
+        current_types = current_data.get(CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES)
 
         return self.async_show_form(
             step_id="init",
@@ -301,6 +353,14 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
                         "line_filter",
                         default=current_line_selection,
                     ): _line_select_selector(self._available_lines, include_all=True),
+                    vol.Optional(
+                        CONF_DISRUPTION_PRIORITIES,
+                        default=current_priorities,
+                    ): priority_selector,
+                    vol.Optional(
+                        CONF_DISRUPTION_TYPES,
+                        default=current_types,
+                    ): type_selector,
                 }
             ),
         )

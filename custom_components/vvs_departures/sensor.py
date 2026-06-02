@@ -221,8 +221,10 @@ class VVSDisruptionSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnt
         if not self.coordinator.data:
             return {"disruptions": []}
         disruptions = self.coordinator.data.get("disruptions", [])
+        # Cap at 20 entries to stay within HA's 16KB attribute limit
+        capped = disruptions[:20]
         return {
-            "disruptions": disruptions,
-            # Convenience: highest priority among active messages
+            "disruptions": capped,
+            "total_count": len(disruptions),
             "highest_priority": disruptions[0]["priority"] if disruptions else None,
         }

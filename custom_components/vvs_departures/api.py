@@ -76,10 +76,15 @@ def _parse_departure(event: dict) -> dict | None:
         return None
 
 
-def _parse_disruptions(events: list[dict], line_filter: list[str]) -> list[dict]:
+def _parse_disruptions(
+    events: list[dict],
+    line_filter: list[str],
+    priority_filter: list[str] | None = None,
+    type_filter: list[str] | None = None,
+) -> list[dict]:
     """
     Extract unique disruption messages from stopEvents.
-    De-duplicates by info ID and optionally filters by line global ID.
+    Filters by line global ID, priority, and info type.
     """
     seen_ids: set[str] = set()
     disruptions: list[dict] = []
@@ -88,7 +93,7 @@ def _parse_disruptions(events: list[dict], line_filter: list[str]) -> list[dict]
         transport = event.get("transportation", {})
         line_global_id = transport.get("globalId", "")
 
-        # If a line filter is active, skip events not matching
+        # Line filter
         if line_filter and line_global_id not in line_filter:
             continue
 
@@ -101,6 +106,16 @@ def _parse_disruptions(events: list[dict], line_filter: list[str]) -> list[dict]
             seen_ids.add(info_id)
 
             priority = info.get("priority", "normal")
+            info_type = info.get("type", "lineInfo")
+
+            # Priority filter
+            if priority_filter and priority not in priority_filter:
+                continue
+
+            # Type filter
+            if type_filter and info_type not in type_filter:
+                continue
+
             links = info.get("infoLinks", [])
             if not links:
                 continue
@@ -115,9 +130,10 @@ def _parse_disruptions(events: list[dict], line_filter: list[str]) -> list[dict]
             disruptions.append(
                 {
                     "id": info_id,
-                    "title": title,
-                    "text": plain_text,
+                    "title": title[:120] if title else "",
+                    "text": plain_text[:300] if plain_text else "",
                     "priority": priority,
+                    "type": info_type,
                     "line": line_name,
                     "created": created_str,
                 }
@@ -250,6 +266,8 @@ class VVSApiClient:
         stop_id: str,
         limit: int = 10,
         line_filter: list[str] | None = None,
+        priority_filter: list[str] | None = None,
+        type_filter: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Fetch departures for a stop.
@@ -291,7 +309,7 @@ class VVSApiClient:
                 departures.append(parsed)
 
         # Parse disruptions (de-duplicated, filtered)
-        disruptions = _parse_disruptions(raw_events, active_filter)
+        disruptions = _parse_disruptions(raw_events, active_filter, priority_filter, type_filter)
 
         return {
             "departures": departures,
