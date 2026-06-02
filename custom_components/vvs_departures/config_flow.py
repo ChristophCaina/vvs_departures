@@ -242,7 +242,7 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
             dest = dep.get("destination", "")
             line_full = dep.get("line_full", name)
             type_part = line_full.replace(name, "").strip() if line_full != name else ""
-            label = f"{name} ({type_part}) → {dest}" if type_part else f"{name} → {dest}"
+            label = f"{name} ({type_part})" if type_part else name
             _LOGGER.debug("Found line: %s (global_id=%s, key=%s)", name, global_id, dedup_key)
             lines.append({
                 "global_id": dedup_key,

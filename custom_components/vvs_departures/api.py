@@ -236,7 +236,7 @@ class VVSApiClient:
 
             # Build a readable label e.g. "S1 (S-Bahn) → Plochingen"
             type_part = line_full.replace(name, "").strip() if line_full != name else ""
-            label = f"{name} ({type_part}) → {dest}" if type_part else f"{name} → {dest}"
+            label = f"{name} ({type_part})" if type_part else name
 
             lines.append(
                 {
