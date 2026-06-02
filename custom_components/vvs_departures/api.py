@@ -92,9 +92,11 @@ def _parse_disruptions(
     for event in events:
         transport = event.get("transportation", {})
         line_global_id = transport.get("globalId", "")
+        line_name_fb = transport.get("disassembledName") or transport.get("number", "")
+        line_filter_key = line_global_id if line_global_id else line_name_fb
 
         # Line filter
-        if line_filter and line_global_id not in line_filter:
+        if line_filter and line_filter_key not in line_filter:
             continue
 
         line_name = transport.get("disassembledName", transport.get("number", "?"))
@@ -303,7 +305,10 @@ class VVSApiClient:
         for event in raw_events:
             transport = event.get("transportation", {})
             gid = transport.get("globalId", "")
-            if active_filter and gid not in active_filter:
+            # Fallback: use line name if globalId is empty
+            line_name = transport.get("disassembledName") or transport.get("number", "")
+            filter_key = gid if gid else line_name
+            if active_filter and filter_key not in active_filter:
                 continue
             parsed = _parse_departure(event)
             if parsed:
