@@ -1,7 +1,7 @@
 # VVS Departures
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![GitHub release](https://img.shields.io/github/release/yourusername/vvs_departures.svg)](https://github.com/yourusername/vvs_departures/releases)
+[![GitHub release](https://img.shields.io/github/release/ChristophCaina/vvs_departures.svg)](https://github.com/ChristophCaina/vvs_departures/releases)
 
 Home Assistant Custom Integration für Echtzeit-Abfahrtsdaten des **Verkehrs- und Tarifverbunds Stuttgart (VVS)** via EFA-Schnittstelle.
 
