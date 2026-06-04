@@ -158,6 +158,9 @@ content: |-
   {% endif %}
 
 ```
+[VSS Departures Card](https://github.com/ChristophCaina/VVS-Departure-Card)  
+<img width="456" height="419" alt="grafik" src="https://github.com/user-attachments/assets/e5d59f9c-5615-4a8e-8c7f-d6ece7e0b8d7" />
+
 
 ## Optionen
 
