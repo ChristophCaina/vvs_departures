@@ -160,6 +160,9 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
                 "label": "Keine Daten",
                 "platform": None,
                 "realtime": False,
+                "notices": [],
+                "notice_title": None,
+                "notice_text": None,
             }
 
         # Calculate minutes until departure
@@ -188,6 +191,9 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
             "label": label,
             "platform": dep.get("platform"),
             "realtime": dep.get("realtime", False),
+            "notices": dep.get("notices", []),
+            "notice_title": dep["notices"][0]["title"] if dep.get("notices") else None,
+            "notice_text": dep["notices"][0]["text"] if dep.get("notices") else None,
         }
 
 
