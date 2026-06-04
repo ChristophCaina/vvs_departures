@@ -75,12 +75,88 @@ Jede Meldung in der Liste enthält:
 
 ## Dashboard-Beispiel
 
-```yaml
+Standard mit Tile Card:  
+<img width="236" height="60" alt="grafik" src="https://github.com/user-attachments/assets/9f6f5099-4357-4122-9674-1adbc36e726a" />
+
+Card-Mod Modifikation - Farbänderung bei Verspätung:  
+<img width="223" height="64" alt="grafik" src="https://github.com/user-attachments/assets/84ecca51-6387-4f66-9e09-99510f431cd2" />
+
+```
+card_mod:
+  style: |
+    ha-card {
+      {% if states(config.entity) in ['unknown', 'unavailable'] %}
+      {% else %}
+        {% set delay = state_attr(config.entity, 'delay_minutes') | int(0) %}
+        {% if delay >= 10 %}
+          --tile-color: var(--red-color) !important;
+        {% elif delay >= 3 %}
+          --tile-color: var(--amber-color) !important;
+        {% else %}
+          --tile-color: var(--green-color) !important;
+        {% endif %}
+      {% endif %}
+    }
+```
+
+Card-Mod Modifikation mit Anzeige, wenn eine Notification vorliegt:  
+<img width="225" height="62" alt="grafik" src="https://github.com/user-attachments/assets/0e2e9622-7f5f-41f3-b28c-2aa7c56826b4" />
+
+```
+card_mod:
+  style: |
+    ha-card {
+      {% if states(config.entity) in ['unknown', 'unavailable'] %}
+      {% else %}
+        {% set delay = state_attr(config.entity, 'delay_minutes') | int(0) %}
+        {% if delay >= 10 %}
+          --tile-color: var(--red-color) !important;
+        {% elif delay >= 3 %}
+          --tile-color: var(--amber-color) !important;
+        {% else %}
+          --tile-color: var(--green-color) !important;
+        {% endif %}
+      {% endif %}
+    }
+    ha-tile-icon::after {
+      {% set delay = state_attr(config.entity, 'delay_minutes') | int(0) %}
+      {% set notices = state_attr(config.entity, 'notices') %}
+      {% set has_notice = notices is not none and notices | length > 0 %}
+      {% if states(config.entity) in ['unknown', 'unavailable'] or (delay < 3 and not has_notice) %}
+        display: none;
+      {% else %}
+        content: '';
+        display: block;
+        position: absolute;
+        top: 0px;
+        right: 0px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background-color: {% if delay >= 10 %}var(--red-color){% elif delay >= 3 %}var(--amber-color){% else %}var(--info-color){% endif %} !important;
+        border: 2px solid var(--card-background-color);
+      {% endif %}
+    }
+```
+
+Ausgabe als Fahrplan-Info mit allen Meldungen pro Sensor:  
+<img width="462" height="1173" alt="grafik" src="https://github.com/user-attachments/assets/c6b9e595-0673-4361-b2ce-c53c4af6e7fd" />
+
+```
 type: markdown
-content: |
-  {% set dep = state_attr('sensor.renningen_abfahrt_1', 'label') %}
-  ## 🚆 Nächste Abfahrt
-  {{ dep }}
+content: |-
+  {% set dep = state_attr('sensor.your_sensor_id', 'notices') %}
+  🚆 **S6 → Nächste Abfahrt**
+  {{ state_attr('sensor.your_sensor_id', 'label') }}
+
+  {% if dep and dep | length > 0 %}
+  ---
+  {% for notice in dep %}
+  ⚠️ **{{ notice.title }}**
+  {{ notice.text }}
+  {% endfor %}
+  {% endif %}
+
 ```
 
 ## Optionen
