@@ -60,6 +60,25 @@ def _parse_departure(event: dict) -> dict | None:
 
         realtime = "MONITORED" in event.get("realtimeStatus", [])
 
+        # --- NEU: Infos/Meldungen pro Abfahrt ---
+        notices = []
+        for info in event.get("infos", []):
+            links = info.get("infoLinks", [])
+            if not links:
+                continue
+            link = links[0]
+            title = link.get("subtitle") or link.get("urlText", "")
+            html_text = link.get("htmlText") or link.get("content", "")
+            plain_text = _strip_html(html_text)
+            notices.append(
+                {
+                    "title": title[:120] if title else "",
+                    "text": plain_text[:300] if plain_text else "",
+                    "priority": info.get("priority", "normal"),
+                    "type": info.get("type", "lineInfo"),
+                }
+            )
+
         return {
             "line": line,
             "line_full": line_full,
@@ -70,6 +89,7 @@ def _parse_departure(event: dict) -> dict | None:
             "delay_minutes": delay_minutes,
             "platform": platform,
             "realtime": realtime,
+            "notices": notices,
         }
     except Exception as exc:
         _LOGGER.debug("Failed to parse departure event: %s", exc)
@@ -223,7 +243,6 @@ class VVSApiClient:
 
         # Fetch departures now + in 2h + in 4h to catch infrequent lines
         offsets_minutes = [0, 120, 240]
-        fetch_tasks = []
 
         async def _fetch_at_offset(offset_min: int) -> list[dict]:
             params = {
@@ -339,7 +358,6 @@ class VVSApiClient:
         for event in raw_events:
             transport = event.get("transportation", {})
             gid = transport.get("globalId", "")
-            # Fallback: use line name if globalId is empty
             line_name = transport.get("disassembledName") or transport.get("number", "")
             filter_key = gid if gid else line_name
             if active_filter and filter_key not in active_filter:
