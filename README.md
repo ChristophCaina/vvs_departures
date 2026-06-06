@@ -17,7 +17,7 @@ Home Assistant Custom Integration für Echtzeit-Abfahrtsdaten des **Verkehrs- un
 ## Installation via HACS
 
 1. HACS öffnen → Integrationen → ⋮ → Benutzerdefinierte Repositories
-2. URL: `https://github.com/yourusername/ha-vvs-departures`
+2. URL: `https://github.com/ChristophCaina/vvs_departures/`
 3. Kategorie: **Integration**
 4. Hinzufügen → Suche nach "VVS Departures" → Installieren
 5. Home Assistant neu starten
