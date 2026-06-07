@@ -1,4 +1,4 @@
-"""DataUpdateCoordinator for VVS Departures."""
+"""DataUpdateCoordinator for EFA Departures."""
 from __future__ import annotations
 
 import logging
@@ -9,11 +9,12 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import VVSApiClient
+from .api import EFAApiClient
 from .const import (
     CONF_DEPARTURE_COUNT,
     CONF_DISRUPTION_PRIORITIES,
     CONF_DISRUPTION_TYPES,
+    CONF_EFA_BASE_URL,
     CONF_LINE_FILTER,
     CONF_STOP_ID,
     DEFAULT_DEPARTURE_COUNT,
@@ -26,7 +27,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class VVSDeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class EFADeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator that fetches departures + disruptions in a single API call."""
 
     def __init__(
@@ -36,7 +37,8 @@ class VVSDeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         config_entry_data: dict,
         update_interval: int = DEFAULT_UPDATE_INTERVAL,
     ) -> None:
-        self._client = VVSApiClient(session)
+        base_url: str = config_entry_data[CONF_EFA_BASE_URL]
+        self._client = EFAApiClient(session, base_url)
         self._stop_id: str = config_entry_data[CONF_STOP_ID]
         self._line_filter: list[str] = config_entry_data.get(CONF_LINE_FILTER, [])
         self._departure_count: int = config_entry_data.get(
@@ -59,14 +61,13 @@ class VVSDeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from EFA API."""
         try:
-            # When a line filter is active, fetch many more raw departures so
-            # that after filtering enough remain to fill all slots.
-            # At a busy hub like Stuttgart Hbf, 15 raw departures may all be
-            # other lines; 60 gives a comfortable margin.
+            # Fetch extra raw departures when a line filter is active so
+            # enough remain after filtering to fill all slots.
             if self._line_filter:
                 fetch_limit = max(self._departure_count * 10, 60)
             else:
                 fetch_limit = max(self._departure_count * 3, 15)
+
             result = await self._client.get_departures(
                 stop_id=self._stop_id,
                 limit=fetch_limit,
