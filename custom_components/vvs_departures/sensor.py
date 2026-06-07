@@ -1,11 +1,11 @@
-"""Sensor platform for VVS Departures."""
+"""Sensor platform for EFA Departures."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -14,12 +14,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DEPARTURE_COUNT,
+    CONF_CITY_NAME,
     CONF_STOP_ID,
     CONF_STOP_NAME,
     DEFAULT_DEPARTURE_COUNT,
     DOMAIN,
 )
-from .coordinator import VVSDeparturesCoordinator
+from .coordinator import EFADeparturesCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,35 +30,36 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up VVS sensor entities from a config entry."""
-    coordinator: VVSDeparturesCoordinator = hass.data[DOMAIN][entry.entry_id]
+    """Set up EFA sensor entities from a config entry."""
+    coordinator: EFADeparturesCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     merged = {**entry.data, **entry.options}
     departure_count = merged.get(CONF_DEPARTURE_COUNT, DEFAULT_DEPARTURE_COUNT)
     stop_id = merged[CONF_STOP_ID]
     stop_name = merged.get(CONF_STOP_NAME, stop_id)
+    provider_name = merged.get(CONF_CITY_NAME, "EFA")
 
     entities: list[SensorEntity] = []
 
-    # One sensor per departure slot
     for idx in range(departure_count):
         entities.append(
-            VVSDepartureSensor(
+            EFADepartureSensor(
                 coordinator=coordinator,
                 entry=entry,
                 stop_id=stop_id,
                 stop_name=stop_name,
+                provider_name=provider_name,
                 index=idx,
             )
         )
 
-    # One disruptions sensor
     entities.append(
-        VVSDisruptionSensor(
+        EFADisruptionSensor(
             coordinator=coordinator,
             entry=entry,
             stop_id=stop_id,
             stop_name=stop_name,
+            provider_name=provider_name,
         )
     )
 
@@ -65,7 +67,6 @@ async def async_setup_entry(
 
 
 def _minutes_label(minutes: int) -> str:
-    """Human readable departure time label."""
     if minutes < 0:
         return "Verpasst"
     if minutes == 0:
@@ -77,32 +78,53 @@ def _minutes_label(minutes: int) -> str:
     return f"{minutes} Min"
 
 
-class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEntity):
+class EFADepartureSensor(CoordinatorEntity[EFADeparturesCoordinator], SensorEntity):
     """Represents a single departure slot at a stop."""
 
-    _attr_icon = "mdi:train"
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
+    # EFA motType → MDI icon
+    # 0=Fernzug/ICE, 1=S-Bahn, 2=U-Bahn, 3=Stadtbahn, 4=Straßenbahn,
+    # 5=Stadtbus, 6=Regionalbus, 7=Schnellbus, 8=Nachtbus,
+    # 9=Fähre/Schiff, 10=Seilbahn, 11=Schwebebahn, 17=AST/Rufbus
+    _MOT_ICONS: dict[int, str] = {
+        0:  "mdi:train",
+        1:  "mdi:train-variant",
+        2:  "mdi:subway-variant",
+        3:  "mdi:tram",
+        4:  "mdi:tram",
+        5:  "mdi:bus",
+        6:  "mdi:bus",
+        7:  "mdi:bus-express",
+        8:  "mdi:bus-clock",
+        9:  "mdi:ferry",
+        10: "mdi:gondola",
+        11: "mdi:gondola",
+        17: "mdi:bus-stop",
+    }
+    _DEFAULT_ICON = "mdi:transit-connection-variant"
+
     def __init__(
         self,
-        coordinator: VVSDeparturesCoordinator,
+        coordinator: EFADeparturesCoordinator,
         entry: ConfigEntry,
         stop_id: str,
         stop_name: str,
+        provider_name: str,
         index: int,
     ) -> None:
         super().__init__(coordinator)
         self._index = index
         self._stop_id = stop_id
         self._stop_name = stop_name
+        self._provider_name = provider_name
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_departure_{index}"
         self._fallback_name = f"Abfahrt {index + 1}"
 
     @property
     def name(self) -> str:
-        """Dynamic name: 'S6 → Weil der Stadt' or fallback 'Abfahrt N'."""
         dep = self._departure
         if dep is None:
             return self._fallback_name
@@ -113,18 +135,25 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
         return self._fallback_name
 
     @property
+    def icon(self) -> str:
+        """Return icon based on EFA mode of transport (motType)."""
+        dep = self._departure
+        if dep is None:
+            return self._DEFAULT_ICON
+        return self._MOT_ICONS.get(dep.get("mot_type", -1), self._DEFAULT_ICON)
+
+    @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, self._stop_id)},
             name=self._stop_name,
-            manufacturer="VVS / EFA",
+            manufacturer=self._provider_name,
             model="Abfahrtstafel",
             entry_type="service",
         )
 
     @property
     def _departure(self) -> dict | None:
-        """Return departure data for this slot, or None."""
         if not self.coordinator.data:
             return None
         departures = self.coordinator.data.get("departures", [])
@@ -134,7 +163,6 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
 
     @property
     def native_value(self) -> datetime | None:
-        """State: datetime of estimated departure (device_class=timestamp)."""
         dep = self._departure
         if dep is None:
             return None
@@ -165,7 +193,6 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
                 "notice_text": None,
             }
 
-        # Calculate minutes until departure
         estimated_str = dep.get("estimated") or dep.get("planned")
         minutes_until = -1
         if estimated_str:
@@ -197,22 +224,23 @@ class VVSDepartureSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnti
         }
 
 
-class VVSDisruptionSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEntity):
+class EFADisruptionSensor(CoordinatorEntity[EFADeparturesCoordinator], SensorEntity):
     """Represents disruption messages for a stop."""
 
-    _attr_icon = "mdi:alert-circle-outline"
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: VVSDeparturesCoordinator,
+        coordinator: EFADeparturesCoordinator,
         entry: ConfigEntry,
         stop_id: str,
         stop_name: str,
+        provider_name: str,
     ) -> None:
         super().__init__(coordinator)
         self._stop_id = stop_id
         self._stop_name = stop_name
+        self._provider_name = provider_name
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_disruptions"
         self._attr_name = "Störungsmeldungen"
@@ -222,34 +250,38 @@ class VVSDisruptionSensor(CoordinatorEntity[VVSDeparturesCoordinator], SensorEnt
         return DeviceInfo(
             identifiers={(DOMAIN, self._stop_id)},
             name=self._stop_name,
-            manufacturer="VVS / EFA",
+            manufacturer=self._provider_name,
             model="Abfahrtstafel",
             entry_type="service",
         )
 
     @property
     def native_value(self) -> int:
-        """State: number of active disruptions."""
         if not self.coordinator.data:
             return 0
         return len(self.coordinator.data.get("disruptions", []))
 
     @property
     def icon(self) -> str:
-        count = self.native_value
-        if count == 0:
-            return "mdi:check-circle-outline"
-        return "mdi:alert-circle-outline"
+        return "mdi:check-circle-outline" if self.native_value == 0 else "mdi:alert-circle-outline"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         if not self.coordinator.data:
-            return {"disruptions": []}
+            return {"disruptions": [], "total_count": 0, "highest_priority": None, "top_disruption_title": None, "top_disruption_text": None}
         disruptions = self.coordinator.data.get("disruptions", [])
-        # Cap at 20 entries to stay within HA's 16KB attribute limit
-        capped = disruptions[:20]
+
+        # Cap list at 10 entries to stay safely under HA's 16KB attribute limit.
+        # Worst case: 10 × (200 title + 500 text + ~100 meta) ≈ 8KB — well within limits.
+        capped = disruptions[:10]
+
+        # Top disruption: full text of the highest-priority entry (up to 1500 chars)
+        top = disruptions[0] if disruptions else None
+
         return {
             "disruptions": capped,
             "total_count": len(disruptions),
-            "highest_priority": disruptions[0]["priority"] if disruptions else None,
+            "highest_priority": top["priority"] if top else None,
+            "top_disruption_title": top["title"] if top else None,
+            "top_disruption_text": top["text"][:1500] if top else None,
         }
