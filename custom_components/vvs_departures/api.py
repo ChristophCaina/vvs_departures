@@ -92,9 +92,14 @@ def _parse_departure(event: dict) -> dict | None:
     try:
         transport = event.get("transportation", {})
         destination = transport.get("destination", {}).get("name", "?")
-        line = transport.get("disassembledName", transport.get("number", "?"))
+        line = transport.get("disassembledName") or transport.get("number") or ""
         line_full = transport.get("name", line)
         global_id = transport.get("globalId", "")
+
+        # If no line name: use line_full as-is (e.g. "Schiff", "Der Katamaran")
+        # This handles ferry/ship entries where EFA only provides the vehicle type
+        if not line:
+            line = line_full if line_full else "?"
 
         planned_str = event.get("departureTimePlanned")
         estimated_str = event.get("departureTimeEstimated") or planned_str
