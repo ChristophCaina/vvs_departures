@@ -2,15 +2,36 @@
   "config": {
     "step": {
       "user": {
+        "title": "Select region",
+        "description": "Choose the EFA region for your area.",
+        "data": {
+          "efa_provider": "Region / EFA endpoint"
+        }
+      },
+      "custom_url": {
+        "title": "Custom EFA URL",
+        "description": "Enter the base URL of the EFA instance (e.g. `https://www.efa-bw.de/bvb3`).",
+        "data": {
+          "custom_url": "EFA base URL"
+        }
+      },
+      "enter_city": {
+        "title": "Enter city / place",
+        "description": "Region: **{region}**\n\nEnter the full name of your city or place.\nExamples: `Stuttgart`, `Freiburg im Breisgau`, `München`",
+        "data": {
+          "city_name": "City / place"
+        }
+      },
+      "search_stop": {
         "title": "Search stop",
-        "description": "Enter the name of the stop (e.g. Stuttgart Hbf).",
+        "description": "Place: **{city}**\n\nEnter the name of the stop (e.g. `Hauptbahnhof` or `Marktplatz`).",
         "data": {
           "stop_search": "Search stop"
         }
       },
       "select_stop": {
         "title": "Select stop",
-        "description": "{count} results found. Please select the desired stop:",
+        "description": "{count} results found in **{city}**. Please select the desired stop:",
         "data": {
           "stop_id": "Stop"
         }
@@ -27,10 +48,13 @@
       "cannot_connect": "Failed to connect to EFA API.",
       "no_results": "No stops found. Please try a different search term.",
       "empty_query": "Please enter a search term.",
-      "invalid_stop": "Invalid stop selected."
+      "invalid_stop": "Invalid selection.",
+      "invalid_region": "Invalid region selected.",
+      "invalid_url": "Please enter a valid URL (starting with http/https).",
+      "no_results_check_city": "No stops found. Check your search term — or go back and enter the full place name (e.g. 'Freiburg im Breisgau' instead of 'Freiburg')."
     },
     "abort": {
-      "already_configured": "This stop is already configured."
+      "already_configured": "This stop is already configured for this endpoint."
     }
   },
   "options": {
@@ -50,9 +74,9 @@
   "entity": {
     "sensor": {
       "disruptions": {
-        "name": "Störungsmeldungen",
+        "name": "Disruptions",
         "state": {
-          "0": "Keine Meldungen"
+          "0": "No disruptions"
         }
       }
     }

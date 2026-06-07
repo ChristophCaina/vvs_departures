@@ -2,15 +2,36 @@
   "config": {
     "step": {
       "user": {
+        "title": "Region wählen",
+        "description": "Wähle die EFA-Region für deinen Bereich.",
+        "data": {
+          "efa_provider": "Region / EFA-Endpunkt"
+        }
+      },
+      "custom_url": {
+        "title": "Benutzerdefinierte EFA-URL",
+        "description": "Gib die Basis-URL der EFA-Instanz ein (z.B. `https://www.efa-bw.de/bvb3`).",
+        "data": {
+          "custom_url": "EFA Basis-URL"
+        }
+      },
+      "enter_city": {
+        "title": "Stadt / Ort eingeben",
+        "description": "Region: **{region}**\n\nGib den vollständigen Namen deiner Stadt oder deines Ortes ein.\nBeispiele: `Stuttgart`, `Freiburg im Breisgau`, `München`",
+        "data": {
+          "city_name": "Stadt / Ort"
+        }
+      },
+      "search_stop": {
         "title": "Haltestelle suchen",
-        "description": "Gib den Namen der Haltestelle ein (z.B. Renningen oder Stuttgart Hbf).",
+        "description": "Ort: **{city}**\n\nGib den Namen der Haltestelle ein (z.B. `Hauptbahnhof` oder `Marktplatz`).",
         "data": {
           "stop_search": "Haltestelle suchen"
         }
       },
       "select_stop": {
         "title": "Haltestelle auswählen",
-        "description": "{count} Treffer gefunden. Bitte wähle die gewünschte Haltestelle:",
+        "description": "{count} Treffer in **{city}** gefunden. Bitte wähle die gewünschte Haltestelle:",
         "data": {
           "stop_id": "Haltestelle"
         }
@@ -27,10 +48,13 @@
       "cannot_connect": "Verbindung zur EFA-API fehlgeschlagen.",
       "no_results": "Keine Haltestellen gefunden. Bitte anderen Suchbegriff versuchen.",
       "empty_query": "Bitte einen Suchbegriff eingeben.",
-      "invalid_stop": "Ungültige Haltestelle ausgewählt."
+      "invalid_stop": "Ungültige Auswahl.",
+      "invalid_region": "Ungültige Region ausgewählt.",
+      "invalid_url": "Bitte eine gültige URL eingeben (beginnend mit http/https).",
+      "no_results_check_city": "Keine Haltestellen gefunden. Bitte Suchbegriff prüfen — oder zurück und vollständigen Ortsnamen eingeben (z.B. 'Freiburg im Breisgau' statt 'Freiburg')."
     },
     "abort": {
-      "already_configured": "Diese Haltestelle ist bereits eingerichtet."
+      "already_configured": "Diese Haltestelle ist für diesen Endpunkt bereits eingerichtet."
     }
   },
   "options": {
