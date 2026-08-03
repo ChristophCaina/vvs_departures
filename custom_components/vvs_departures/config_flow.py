@@ -58,8 +58,27 @@ def _decode_line_value(value: str) -> tuple[str, str]:
     return global_id, destination
 
 
-def _build_direction_entries(selected_values: list[str], available_lines: list[dict]) -> list[dict]:
-    """Turn selected selector values into CONF_LINE_DIRECTIONS entries (without counts)."""
+def _build_direction_entries(
+    selected_values: list[str],
+    available_lines: list[dict],
+    fallback_entries: list[dict] | None = None,
+) -> list[dict]:
+    """
+    Turn selected selector values into CONF_LINE_DIRECTIONS entries (without counts).
+
+    fallback_entries (typically the entries already stored in the config
+    entry) are used when a selected value isn't present in the freshly
+    fetched available_lines — e.g. a direction that was confirmed on a
+    previous options-flow run (possibly via an inferred alias) but simply
+    wasn't observed in *this* run's live sampling window. Without this, a
+    perfectly valid existing selection would silently be dropped just
+    because it didn't happen to show up again right now.
+    """
+    fallback_by_value: dict[str, dict] = {}
+    for e in fallback_entries or []:
+        val = ALL_LINES_KEY if e["line_global_id"] is None else e["key"]
+        fallback_by_value[val] = e
+
     by_value = {
         _encode_line_value(line["global_id"], line.get("destination", "")): line
         for line in available_lines
@@ -77,19 +96,26 @@ def _build_direction_entries(selected_values: list[str], available_lines: list[d
             )
             continue
         line = by_value.get(value)
-        if line is None:
+        if line is not None:
+            destination = line.get("destination") or None
+            entry: dict[str, Any] = {
+                "key": value,
+                "line_global_id": line["global_id"],
+                "line_name": line["name"],
+                "destination": destination,
+            }
+            aliases = line.get("destination_aliases")
+            if aliases:
+                entry["destination_aliases"] = aliases
+            entries.append(entry)
             continue
-        destination = line.get("destination") or None
-        entry: dict[str, Any] = {
-            "key": value,
-            "line_global_id": line["global_id"],
-            "line_name": line["name"],
-            "destination": destination,
-        }
-        aliases = line.get("destination_aliases")
-        if aliases:
-            entry["destination_aliases"] = aliases
-        entries.append(entry)
+        fallback = fallback_by_value.get(value)
+        if fallback is not None:
+            entries.append(dict(fallback))
+            continue
+        # Genuinely unknown value with no fallback — nothing sensible to
+        # store, skip it.
+        _LOGGER.warning("EFA Departures: unbekannter Auswahlwert '%s' übersprungen", value)
     return entries
 
 
@@ -161,16 +187,37 @@ def _stop_select_selector(stops: list[dict]) -> SelectSelector:
     )
 
 
-def _line_select_selector(lines: list[dict], include_all: bool = True) -> SelectSelector:
-    """One selectable option per (Linie, Richtung) — not just per Linie."""
+def _line_select_selector(
+    lines: list[dict],
+    include_all: bool = True,
+    extra_options: list[SelectOptionDict] | None = None,
+) -> SelectSelector:
+    """One selectable option per (Linie, Richtung) — not just per Linie.
+
+    extra_options lets the caller keep a previously-selected value that
+    isn't part of the freshly fetched `lines` as a valid, visible option —
+    HA's SelectSelector otherwise rejects a default that isn't among its
+    options, which would crash the options flow for any selection not
+    re-observed in the latest live sample.
+    """
     options: list[SelectOptionDict] = []
+    seen_values: set[str] = set()
     if include_all:
         options.append(
             SelectOptionDict(value=ALL_LINES_KEY, label="Alle Linien (kein Filter, altes Verhalten)")
         )
+        seen_values.add(ALL_LINES_KEY)
     for line in lines:
         value = _encode_line_value(line["global_id"], line.get("destination", ""))
+        if value in seen_values:
+            continue
+        seen_values.add(value)
         options.append(SelectOptionDict(value=value, label=line["label"]))
+    for extra in extra_options or []:
+        if extra["value"] in seen_values:
+            continue
+        seen_values.add(extra["value"])
+        options.append(extra)
     return SelectSelector(
         SelectSelectorConfig(options=options, multiple=True, mode=SelectSelectorMode.LIST)
     )
@@ -432,18 +479,35 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
                 _LOGGER.warning("Could not load lines for options flow: %s", exc)
 
         # Preselect whatever is currently configured. Entries that reference a
-        # line/direction no longer returned by the API (e.g. seasonal line)
-        # are kept as their raw selector value so they don't silently vanish.
+        # line/direction not present in *this* run's freshly fetched lines
+        # (e.g. not observed in the current live sampling window) are kept
+        # selectable via extra_options below, instead of being silently
+        # dropped or crashing the selector's default-value validation.
         current_selection = [
             ALL_LINES_KEY if e["line_global_id"] is None else e["key"]
             for e in current_entries
         ] or [ALL_LINES_KEY]
 
+        fresh_values = {ALL_LINES_KEY} | {
+            _encode_line_value(line["global_id"], line.get("destination", ""))
+            for line in self._available_lines
+        }
+        stale_options = [
+            SelectOptionDict(
+                value=val,
+                label=f"{_entry_label(e)} (aktuell nicht in Live-Daten bestätigt)",
+            )
+            for val, e in zip(current_selection, current_entries)
+            if val not in fresh_values
+        ]
+
         if user_input is not None:
             selected = user_input.get("line_filter", [])
             if not selected:
                 selected = [ALL_LINES_KEY]
-            self._pending_entries = _build_direction_entries(selected, self._available_lines)
+            self._pending_entries = _build_direction_entries(
+                selected, self._available_lines, fallback_entries=current_entries
+            )
             self._pending_other = {
                 CONF_UPDATE_INTERVAL: int(user_input[CONF_UPDATE_INTERVAL]),
                 CONF_DISRUPTION_PRIORITIES: user_input.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES),
@@ -473,7 +537,7 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(CONF_UPDATE_INTERVAL, default=current_data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)):
                     NumberSelector(NumberSelectorConfig(min=30, max=300, step=10, mode=NumberSelectorMode.SLIDER)),
                 vol.Optional("line_filter", default=current_selection):
-                    _line_select_selector(self._available_lines, include_all=True),
+                    _line_select_selector(self._available_lines, include_all=True, extra_options=stale_options),
                 vol.Optional(CONF_DISRUPTION_PRIORITIES, default=current_data.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES)):
                     SelectSelector(SelectSelectorConfig(options=priority_options, multiple=True, mode=SelectSelectorMode.LIST)),
                 vol.Optional(CONF_DISRUPTION_TYPES, default=current_data.get(CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES)):
