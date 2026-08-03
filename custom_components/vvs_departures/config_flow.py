@@ -23,18 +23,18 @@ from homeassistant.helpers.selector import (
 
 from .api import EFAApiClient
 from .const import (
+    ALL_LINES_SENTINEL_KEY,
     CONF_CITY_NAME,
-    CONF_DEPARTURE_COUNT,
     CONF_DISRUPTION_PRIORITIES,
     CONF_DISRUPTION_TYPES,
     CONF_EFA_BASE_URL,
-    CONF_LINE_FILTER,
+    CONF_LINE_DIRECTIONS,
     CONF_REGION_NAME,
     CONF_STOP_ID,
     CONF_STOP_NAME,
     CONF_UPDATE_INTERVAL,
     CUSTOM_PROVIDER_KEY,
-    DEFAULT_DEPARTURE_COUNT,
+    DEFAULT_DIRECTION_COUNT,
     DEFAULT_DISRUPTION_PRIORITIES,
     DEFAULT_DISRUPTION_TYPES,
     DEFAULT_UPDATE_INTERVAL,
@@ -44,7 +44,101 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-ALL_LINES_KEY = "__all__"
+ALL_LINES_KEY = "__all__"  # selector value for the legacy "alle Linien" sentinel
+
+
+def _encode_line_value(global_id: str, destination: str) -> str:
+    """Encode a (line, direction) pair as a single selector value."""
+    return f"{global_id}|{destination}"
+
+
+def _decode_line_value(value: str) -> tuple[str, str]:
+    """Decode a selector value back into (global_id, destination)."""
+    global_id, _, destination = value.partition("|")
+    return global_id, destination
+
+
+def _build_direction_entries(selected_values: list[str], available_lines: list[dict]) -> list[dict]:
+    """Turn selected selector values into CONF_LINE_DIRECTIONS entries (without counts)."""
+    by_value = {
+        _encode_line_value(line["global_id"], line.get("destination", "")): line
+        for line in available_lines
+    }
+    entries: list[dict] = []
+    for value in selected_values:
+        if value == ALL_LINES_KEY:
+            entries.append(
+                {
+                    "key": ALL_LINES_SENTINEL_KEY,
+                    "line_global_id": None,
+                    "line_name": "Alle Linien (kein Filter)",
+                    "destination": None,
+                }
+            )
+            continue
+        line = by_value.get(value)
+        if line is None:
+            continue
+        destination = line.get("destination") or None
+        entry: dict[str, Any] = {
+            "key": value,
+            "line_global_id": line["global_id"],
+            "line_name": line["name"],
+            "destination": destination,
+        }
+        aliases = line.get("destination_aliases")
+        if aliases:
+            entry["destination_aliases"] = aliases
+        entries.append(entry)
+    return entries
+
+
+def _counts_schema(entries: list[dict], current_counts: dict[str, int] | None = None) -> vol.Schema:
+    """Build a dynamic schema with one NumberSelector per direction entry."""
+    current_counts = current_counts or {}
+    field_names = _count_field_names(entries)
+    schema_dict: dict[Any, Any] = {}
+    for e, field_name in zip(entries, field_names):
+        default = current_counts.get(e["key"], DEFAULT_DIRECTION_COUNT)
+        schema_dict[vol.Required(field_name, default=default)] = NumberSelector(
+            NumberSelectorConfig(min=1, max=10, step=1, mode=NumberSelectorMode.BOX)
+        )
+    return vol.Schema(schema_dict)
+
+
+def _apply_counts(entries: list[dict], user_input: dict[str, Any]) -> list[dict]:
+    """Read the submitted counts form and attach 'count' to each entry."""
+    field_names = _count_field_names(entries)
+    result = []
+    for e, field_name in zip(entries, field_names):
+        count = int(user_input.get(field_name, DEFAULT_DIRECTION_COUNT))
+        result.append({**e, "count": count})
+    return result
+
+
+def _entry_label(e: dict) -> str:
+    if e["line_global_id"] is None:
+        return e["line_name"]
+    if e.get("destination"):
+        return f"{e['line_name']} → {e['destination']}"
+    return f"{e['line_name']} (beide Richtungen)"
+
+
+def _count_field_names(entries: list[dict]) -> list[str]:
+    """
+    Human-readable, unique field names for the counts form — used directly
+    as the visible label, since dynamic per-selection fields can't be
+    pre-translated in strings.json/translations (their text only exists at
+    runtime, once the user has picked specific lines/directions).
+    """
+    used: dict[str, int] = {}
+    names: list[str] = []
+    for e in entries:
+        base = f"{_entry_label(e)} · Anzahl Abfahrten"
+        n = used.get(base, 0)
+        used[base] = n + 1
+        names.append(base if n == 0 else f"{base} ({n + 1})")
+    return names
 
 
 def _region_selector() -> SelectSelector:
@@ -68,11 +162,15 @@ def _stop_select_selector(stops: list[dict]) -> SelectSelector:
 
 
 def _line_select_selector(lines: list[dict], include_all: bool = True) -> SelectSelector:
+    """One selectable option per (Linie, Richtung) — not just per Linie."""
     options: list[SelectOptionDict] = []
     if include_all:
-        options.append(SelectOptionDict(value=ALL_LINES_KEY, label="Alle Linien (kein Filter)"))
+        options.append(
+            SelectOptionDict(value=ALL_LINES_KEY, label="Alle Linien (kein Filter, altes Verhalten)")
+        )
     for line in lines:
-        options.append(SelectOptionDict(value=line["global_id"], label=line["label"]))
+        value = _encode_line_value(line["global_id"], line.get("destination", ""))
+        options.append(SelectOptionDict(value=value, label=line["label"]))
     return SelectSelector(
         SelectSelectorConfig(options=options, multiple=True, mode=SelectSelectorMode.LIST)
     )
@@ -81,7 +179,7 @@ def _line_select_selector(lines: list[dict], include_all: bool = True) -> Select
 class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the config flow for VVS/EFA Departures."""
 
-    VERSION = 3
+    VERSION = 4
 
     def __init__(self) -> None:
         self._region_name: str = ""
@@ -90,6 +188,7 @@ class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._found_stops: list[dict] = []
         self._selected_stop: dict = {}
         self._available_lines: list[dict] = []
+        self._pending_entries: list[dict] = []
 
     # ── Step 1: Region ───────────────────────────────────────────────────────
     async def async_step_user(
@@ -225,7 +324,16 @@ class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._available_lines = []
                 if self._available_lines:
                     return await self.async_step_select_lines()
-                return self._create_entry(line_filter=[])
+                # Provider doesn't support SERVINGLINES/DM sampling here — fall
+                # back to a single unfiltered "alle Linien" entry.
+                fallback_entry = {
+                    "key": ALL_LINES_SENTINEL_KEY,
+                    "line_global_id": None,
+                    "line_name": "Alle Linien (kein Filter)",
+                    "destination": None,
+                    "count": DEFAULT_DIRECTION_COUNT * 2,
+                }
+                return self._create_entry(line_directions=[fallback_entry])
 
         return self.async_show_form(
             step_id="select_stop",
@@ -239,14 +347,16 @@ class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    # ── Step 4: Line filter ──────────────────────────────────────────────────
+    # ── Step 4: Line + Richtung auswählen ───────────────────────────────────
     async def async_step_select_lines(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         if user_input is not None:
             selected = user_input.get("line_filter", [])
-            line_filter = [] if (ALL_LINES_KEY in selected or not selected) else selected
-            return self._create_entry(line_filter=line_filter)
+            if not selected:
+                selected = [ALL_LINES_KEY]
+            self._pending_entries = _build_direction_entries(selected, self._available_lines)
+            return await self.async_step_set_counts()
 
         return self.async_show_form(
             step_id="select_lines",
@@ -260,7 +370,23 @@ class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"stop_name": self._selected_stop.get("name", "")},
         )
 
-    def _create_entry(self, line_filter: list[str]) -> config_entries.FlowResult:
+    # ── Step 5: Anzahl Sensoren je Linie+Richtung ───────────────────────────
+    async def async_step_set_counts(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        if user_input is not None:
+            line_directions = _apply_counts(self._pending_entries, user_input)
+            return self._create_entry(line_directions=line_directions)
+
+        return self.async_show_form(
+            step_id="set_counts",
+            data_schema=_counts_schema(self._pending_entries),
+            description_placeholders={
+                "selection": ", ".join(_entry_label(e) for e in self._pending_entries)
+            },
+        )
+
+    def _create_entry(self, line_directions: list[dict]) -> config_entries.FlowResult:
         stop = self._selected_stop
         title = f"{stop.get('name', stop.get('id', 'EFA Stop'))} · {self._city_name}"
         return self.async_create_entry(
@@ -271,8 +397,7 @@ class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_CITY_NAME: self._city_name,
                 CONF_STOP_ID: stop["id"],
                 CONF_STOP_NAME: stop.get("raw_name", stop.get("name", "")),
-                CONF_LINE_FILTER: line_filter,
-                CONF_DEPARTURE_COUNT: DEFAULT_DEPARTURE_COUNT,
+                CONF_LINE_DIRECTIONS: line_directions,
                 CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
             },
         )
@@ -288,12 +413,15 @@ class VVSDeparturesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._available_lines: list[dict] = []
+        self._pending_entries: list[dict] = []
+        self._pending_other: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         current_data = {**self.config_entry.data, **self.config_entry.options}
-        current_line_filter: list[str] = current_data.get(CONF_LINE_FILTER, [])
+        current_entries: list[dict] = current_data.get(CONF_LINE_DIRECTIONS, [])
+        current_counts = {e["key"]: e.get("count", DEFAULT_DIRECTION_COUNT) for e in current_entries}
 
         if not self._available_lines:
             session = async_get_clientsession(self.hass)
@@ -303,21 +431,25 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
             except Exception as exc:
                 _LOGGER.warning("Could not load lines for options flow: %s", exc)
 
-        current_line_selection = current_line_filter if current_line_filter else [ALL_LINES_KEY]
+        # Preselect whatever is currently configured. Entries that reference a
+        # line/direction no longer returned by the API (e.g. seasonal line)
+        # are kept as their raw selector value so they don't silently vanish.
+        current_selection = [
+            ALL_LINES_KEY if e["line_global_id"] is None else e["key"]
+            for e in current_entries
+        ] or [ALL_LINES_KEY]
 
         if user_input is not None:
-            selected_lines = user_input.get("line_filter", [])
-            line_filter = [] if (ALL_LINES_KEY in selected_lines or not selected_lines) else selected_lines
-            return self.async_create_entry(
-                title="",
-                data={
-                    CONF_DEPARTURE_COUNT: int(user_input[CONF_DEPARTURE_COUNT]),
-                    CONF_UPDATE_INTERVAL: int(user_input[CONF_UPDATE_INTERVAL]),
-                    CONF_LINE_FILTER: line_filter,
-                    CONF_DISRUPTION_PRIORITIES: user_input.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES),
-                    CONF_DISRUPTION_TYPES: user_input.get(CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES),
-                },
-            )
+            selected = user_input.get("line_filter", [])
+            if not selected:
+                selected = [ALL_LINES_KEY]
+            self._pending_entries = _build_direction_entries(selected, self._available_lines)
+            self._pending_other = {
+                CONF_UPDATE_INTERVAL: int(user_input[CONF_UPDATE_INTERVAL]),
+                CONF_DISRUPTION_PRIORITIES: user_input.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES),
+                CONF_DISRUPTION_TYPES: user_input.get(CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES),
+            }
+            return await self.async_step_set_counts()
 
         priority_options = [
             SelectOptionDict(value="veryHigh", label="Sehr hoch (veryHigh)"),
@@ -332,19 +464,42 @@ class VVSDeparturesOptionsFlow(config_entries.OptionsFlow):
             SelectOptionDict(value="network",     label="Netzweit"),
         ]
 
+        # Stash for use when pre-filling the counts step below.
+        self._current_counts = current_counts
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
-                vol.Optional(CONF_DEPARTURE_COUNT, default=current_data.get(CONF_DEPARTURE_COUNT, DEFAULT_DEPARTURE_COUNT)):
-                    NumberSelector(NumberSelectorConfig(min=1, max=10, step=1, mode=NumberSelectorMode.BOX)),
                 vol.Optional(CONF_UPDATE_INTERVAL, default=current_data.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)):
                     NumberSelector(NumberSelectorConfig(min=30, max=300, step=10, mode=NumberSelectorMode.SLIDER)),
-                vol.Optional("line_filter", default=current_line_selection):
+                vol.Optional("line_filter", default=current_selection):
                     _line_select_selector(self._available_lines, include_all=True),
                 vol.Optional(CONF_DISRUPTION_PRIORITIES, default=current_data.get(CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES)):
                     SelectSelector(SelectSelectorConfig(options=priority_options, multiple=True, mode=SelectSelectorMode.LIST)),
                 vol.Optional(CONF_DISRUPTION_TYPES, default=current_data.get(CONF_DISRUPTION_TYPES, DEFAULT_DISRUPTION_TYPES)):
                     SelectSelector(SelectSelectorConfig(options=type_options, multiple=True, mode=SelectSelectorMode.LIST)),
             }),
+        )
+
+    async def async_step_set_counts(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        if user_input is not None:
+            line_directions = _apply_counts(self._pending_entries, user_input)
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self._pending_other,
+                    CONF_LINE_DIRECTIONS: line_directions,
+                },
+            )
+
+        current_counts = getattr(self, "_current_counts", {})
+        return self.async_show_form(
+            step_id="set_counts",
+            data_schema=_counts_schema(self._pending_entries, current_counts),
+            description_placeholders={
+                "selection": ", ".join(_entry_label(e) for e in self._pending_entries)
+            },
         )
 

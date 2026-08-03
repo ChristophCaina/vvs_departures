@@ -37,11 +37,15 @@
         }
       },
       "select_lines": {
-        "title": "Select lines",
-        "description": "Select lines to monitor. Choose \"All lines\" for no filter.\n\nStop: **{stop_name}**",
+        "title": "Select lines + direction",
+        "description": "Select the desired lines **per direction of travel**. A line can appear more than once — once per destination/direction. Choose \"All lines\" for no filter (old behaviour).\n\nStop: **{stop_name}**",
         "data": {
-          "line_filter": "Lines"
+          "line_filter": "Lines / directions"
         }
+      },
+      "set_counts": {
+        "title": "Number of departures per selection",
+        "description": "For each selected line/direction, set how many departure sensors should be created. This guarantees every selection gets its own sensors, regardless of how often other lines depart.\n\nSelection: **{selection}**"
       }
     },
     "error": {
@@ -61,13 +65,17 @@
     "step": {
       "init": {
         "title": "Options",
+        "description": "Re-select the desired lines per direction, or adjust the existing selection. The number of sensors per selection is set in the next step.",
         "data": {
-          "departure_count": "Number of departures (1–10)",
           "update_interval": "Update interval in seconds (30–300)",
-          "line_filter": "Lines (multi-select)",
+          "line_filter": "Lines / directions (multi-select)",
           "disruption_priorities": "Disruptions: priorities",
           "disruption_types": "Disruptions: types"
         }
+      },
+      "set_counts": {
+        "title": "Number of departures per selection",
+        "description": "For each selected line/direction, set how many departure sensors should be created.\n\nSelection: **{selection}**"
       }
     }
   },

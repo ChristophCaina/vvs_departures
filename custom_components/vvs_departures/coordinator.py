@@ -11,13 +11,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import EFAApiClient
 from .const import (
-    CONF_DEPARTURE_COUNT,
     CONF_DISRUPTION_PRIORITIES,
     CONF_DISRUPTION_TYPES,
     CONF_EFA_BASE_URL,
-    CONF_LINE_FILTER,
+    CONF_LINE_DIRECTIONS,
     CONF_STOP_ID,
-    DEFAULT_DEPARTURE_COUNT,
     DEFAULT_DISRUPTION_PRIORITIES,
     DEFAULT_DISRUPTION_TYPES,
     DEFAULT_UPDATE_INTERVAL,
@@ -40,10 +38,7 @@ class EFADeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         base_url: str = config_entry_data[CONF_EFA_BASE_URL]
         self._client = EFAApiClient(session, base_url)
         self._stop_id: str = config_entry_data[CONF_STOP_ID]
-        self._line_filter: list[str] = config_entry_data.get(CONF_LINE_FILTER, [])
-        self._departure_count: int = config_entry_data.get(
-            CONF_DEPARTURE_COUNT, DEFAULT_DEPARTURE_COUNT
-        )
+        self._direction_filters: list[dict] = config_entry_data.get(CONF_LINE_DIRECTIONS, [])
         self._priority_filter: list[str] = config_entry_data.get(
             CONF_DISRUPTION_PRIORITIES, DEFAULT_DISRUPTION_PRIORITIES
         )
@@ -61,17 +56,9 @@ class EFADeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from EFA API."""
         try:
-            # Fetch extra raw departures when a line filter is active so
-            # enough remain after filtering to fill all slots.
-            if self._line_filter:
-                fetch_limit = max(self._departure_count * 10, 60)
-            else:
-                fetch_limit = max(self._departure_count * 3, 15)
-
             result = await self._client.get_departures(
                 stop_id=self._stop_id,
-                limit=fetch_limit,
-                line_filter=self._line_filter if self._line_filter else None,
+                direction_filters=self._direction_filters,
                 priority_filter=self._priority_filter if self._priority_filter else None,
                 type_filter=self._type_filter if self._type_filter else None,
             )

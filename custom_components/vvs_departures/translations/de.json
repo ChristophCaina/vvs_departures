@@ -37,11 +37,15 @@
         }
       },
       "select_lines": {
-        "title": "Linien auswählen",
-        "description": "Wähle die Linien, die überwacht werden sollen. Wähle 'Alle Linien' für keinen Filter.\n\nHaltestelle: **{stop_name}**",
+        "title": "Linien + Richtung auswählen",
+        "description": "Wähle die gewünschten Linien **je Fahrtrichtung**. Eine Linie kann mehrfach erscheinen — einmal pro Ziel/Richtung. Wähle 'Alle Linien' für keinen Filter (altes Verhalten).\n\nHaltestelle: **{stop_name}**",
         "data": {
-          "line_filter": "Linien"
+          "line_filter": "Linien / Richtungen"
         }
+      },
+      "set_counts": {
+        "title": "Anzahl Abfahrten je Auswahl",
+        "description": "Lege für jede ausgewählte Linie/Richtung fest, wie viele Abfahrts-Sensoren angelegt werden sollen. So bekommt jede Auswahl garantiert eigene Sensoren, unabhängig davon wie oft andere Linien fahren.\n\nAuswahl: **{selection}**"
       }
     },
     "error": {
@@ -61,13 +65,17 @@
     "step": {
       "init": {
         "title": "Optionen",
+        "description": "Wähle die gewünschten Linien je Fahrtrichtung neu aus oder passe die bestehende Auswahl an. Die Anzahl der Sensoren je Auswahl legst du im nächsten Schritt fest.",
         "data": {
-          "departure_count": "Anzahl Abfahrten (1–10)",
           "update_interval": "Aktualisierungsintervall in Sekunden (30–300)",
-          "line_filter": "Linien (Mehrfachauswahl)",
+          "line_filter": "Linien / Richtungen (Mehrfachauswahl)",
           "disruption_priorities": "Störungsmeldungen: Prioritäten",
           "disruption_types": "Störungsmeldungen: Typen"
         }
+      },
+      "set_counts": {
+        "title": "Anzahl Abfahrten je Auswahl",
+        "description": "Lege für jede ausgewählte Linie/Richtung fest, wie viele Abfahrts-Sensoren angelegt werden sollen.\n\nAuswahl: **{selection}**"
       }
     }
   },

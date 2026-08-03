@@ -28,15 +28,32 @@ CONF_REGION_NAME = "region_name"
 CONF_CITY_NAME = "city_name"
 CONF_STOP_ID = "stop_id"
 CONF_STOP_NAME = "stop_name"
-CONF_LINE_FILTER = "line_filter"
+CONF_LINE_FILTER = "line_filter"          # legacy (≤v3): list[str] of line global_ids
+CONF_LINE_DIRECTIONS = "line_directions"  # v4+: list[dict] — see below
 CONF_DEPARTURE_COUNT = "departure_count"
 CONF_UPDATE_INTERVAL = "update_interval"
 CONF_DISRUPTION_UPDATE_INTERVAL = "disruption_update_interval"
 
 # Defaults
 DEFAULT_DEPARTURE_COUNT = 4
+DEFAULT_DIRECTION_COUNT = 2         # sensors per selected Linie+Richtung entry
 DEFAULT_UPDATE_INTERVAL = 60        # seconds
 DEFAULT_DISRUPTION_INTERVAL = 3600  # seconds
+
+# CONF_LINE_DIRECTIONS holds a list of dicts, one per configured "Linie + Richtung":
+#   {
+#     "key":            str        stable id, used for unique_id + bucket lookup
+#     "line_global_id": str|None   EFA globalId of the line; None = legacy "alle Linien" sentinel
+#     "line_name":      str        display name, e.g. "54" or "S6"
+#     "destination":    str|None   direction/destination text; None = beide Richtungen
+#     "count":          int        number of departure sensors for this entry
+#   }
+#
+# Special sentinel key for the legacy "no filter at all" behaviour, kept around
+# so entries migrated from ≤v3 configs without an explicit line_filter keep
+# working exactly as before until the user opts into the new per-line model.
+ALL_LINES_SENTINEL_KEY = "__all_lines__"
+NO_DIRECTION_FILTER = "__all__"  # used in the config-flow selector value, not stored as-is
 
 # Coordinator keys
 COORDINATOR_DEPARTURES = "departures"
