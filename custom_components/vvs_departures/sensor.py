@@ -1,6 +1,7 @@
 """Sensor platform for EFA Departures."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -13,11 +14,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    CONF_DEPARTURE_COUNT,
     CONF_CITY_NAME,
+    CONF_LINE_DIRECTIONS,
     CONF_STOP_ID,
     CONF_STOP_NAME,
-    DEFAULT_DEPARTURE_COUNT,
     DOMAIN,
 )
 from .coordinator import EFADeparturesCoordinator
@@ -34,24 +34,29 @@ async def async_setup_entry(
     coordinator: EFADeparturesCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     merged = {**entry.data, **entry.options}
-    departure_count = merged.get(CONF_DEPARTURE_COUNT, DEFAULT_DEPARTURE_COUNT)
+    line_directions = merged.get(CONF_LINE_DIRECTIONS, [])
     stop_id = merged[CONF_STOP_ID]
     stop_name = merged.get(CONF_STOP_NAME, stop_id)
     provider_name = merged.get(CONF_CITY_NAME, "EFA")
 
     entities: list[SensorEntity] = []
 
-    for idx in range(departure_count):
-        entities.append(
-            EFADepartureSensor(
-                coordinator=coordinator,
-                entry=entry,
-                stop_id=stop_id,
-                stop_name=stop_name,
-                provider_name=provider_name,
-                index=idx,
+    for direction_entry in line_directions:
+        count = max(int(direction_entry.get("count", 0)), 0)
+        for idx in range(count):
+            entities.append(
+                EFADepartureSensor(
+                    coordinator=coordinator,
+                    entry=entry,
+                    stop_id=stop_id,
+                    stop_name=stop_name,
+                    provider_name=provider_name,
+                    bucket_key=direction_entry["key"],
+                    line_name=direction_entry.get("line_name", ""),
+                    destination_name=direction_entry.get("destination"),
+                    index=idx,
+                )
             )
-        )
 
     entities.append(
         EFADisruptionSensor(
@@ -112,16 +117,29 @@ class EFADepartureSensor(CoordinatorEntity[EFADeparturesCoordinator], SensorEnti
         stop_id: str,
         stop_name: str,
         provider_name: str,
+        bucket_key: str,
+        line_name: str,
+        destination_name: str | None,
         index: int,
     ) -> None:
         super().__init__(coordinator)
         self._index = index
+        self._bucket_key = bucket_key
         self._stop_id = stop_id
         self._stop_name = stop_name
         self._provider_name = provider_name
         self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_departure_{index}"
-        self._fallback_name = f"Abfahrt {index + 1}"
+        # unique_id is derived from a hash of the bucket key rather than the
+        # raw key itself, since the key can contain EFA globalId characters
+        # that aren't guaranteed to be safe/stable as an entity_id fragment.
+        bucket_hash = hashlib.sha1(bucket_key.encode("utf-8")).hexdigest()[:10]
+        self._attr_unique_id = f"{entry.entry_id}_{bucket_hash}_{index}"
+        if destination_name:
+            self._fallback_name = f"{line_name} → {destination_name} · Abfahrt {index + 1}"
+        elif line_name:
+            self._fallback_name = f"{line_name} · Abfahrt {index + 1}"
+        else:
+            self._fallback_name = f"Abfahrt {index + 1}"
 
     @property
     def name(self) -> str:
@@ -156,9 +174,9 @@ class EFADepartureSensor(CoordinatorEntity[EFADeparturesCoordinator], SensorEnti
     def _departure(self) -> dict | None:
         if not self.coordinator.data:
             return None
-        departures = self.coordinator.data.get("departures", [])
-        if self._index < len(departures):
-            return departures[self._index]
+        bucket = self.coordinator.data.get("buckets", {}).get(self._bucket_key, [])
+        if self._index < len(bucket):
+            return bucket[self._index]
         return None
 
     @property

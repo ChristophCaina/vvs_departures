@@ -24,6 +24,57 @@ def _strip_html(text: str) -> str:
     return text
 
 
+def _normalize_destination(text: str) -> str:
+    """
+    Normalize a destination/direction string for robust comparison.
+
+    EFA instances can report slightly different destination text for the
+    same physical direction depending on the endpoint (SERVINGLINES vs. the
+    live departure monitor) — e.g. parenthetical suffixes like "(Fildertunnel)",
+    a leading city name, or just different whitespace. We strip those
+    variations away so a configured direction still matches the live trip.
+    """
+    if not text:
+        return ""
+    t = text.casefold().strip()
+    t = re.sub(r"\([^)]*\)", " ", t)   # drop "(...)" annotations
+    t = re.sub(r"[.\-–—,/]", " ", t)   # drop punctuation that varies between sources
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _destination_matches(configured: str, live: str) -> bool:
+    """True if a configured direction should be considered the same as a live one."""
+    if configured == live:
+        return True
+    norm_configured = _normalize_destination(configured)
+    norm_live = _normalize_destination(live)
+    if not norm_configured or not norm_live:
+        return False
+    if norm_configured == norm_live:
+        return True
+    # Substring fallback (either direction): handles cases like "Schwabstraße"
+    # vs "Stuttgart Schwabstraße", or a live trip ending one stop short/long
+    # of the line's official terminus (e.g. "Herrenberg" vs "Herrenberg Bahnhof").
+    return norm_configured in norm_live or norm_live in norm_configured
+
+
+def _destination_matches_any(configured: str, aliases: list[str], live: str) -> bool:
+    """
+    Like _destination_matches, but also accepts any configured alias.
+
+    Aliases are destinations inferred by elimination when a line's official
+    terminus is temporarily unreachable (e.g. a construction-related
+    short-turn) — see _infer_destination_aliases below. Checking the
+    canonical destination first means service returning to normal (the
+    official terminus reappearing live) keeps matching without needing to
+    reconfigure anything.
+    """
+    if _destination_matches(configured, live):
+        return True
+    return any(_destination_matches(alias, live) for alias in aliases)
+
+
 def _mot_from_line_full(line_full: str, line: str) -> int:
     """
     Derive EFA motType integer from the line_full string prefix.
@@ -492,19 +543,113 @@ class EFAApiClient:
 
     async def get_serving_lines(self, stop_id: str) -> list[dict]:
         """
-        Fetch all lines serving a stop via XML_SERVINGLINES_REQUEST.
+        Build the list of selectable (Linie, Richtung) entries for a stop.
 
-        This is the authoritative source — no time-window guessing needed.
-        Falls back to the DM-based approach if SERVINGLINES returns nothing
-        (some older EFA instances don't support it fully).
+        SERVINGLINES discovers the *complete* set of lines serving the stop
+        (including rare/night lines), but its destination text is not always
+        what live DM polls actually show at this specific stop — e.g. during
+        construction-related short-turns, trains show an intermediate
+        terminus instead of the line's official far end.
+
+        For each line, official termini (from SERVINGLINES) are matched
+        against live-observed destinations (from DM sampling). Directly
+        matching pairs are used as-is. If exactly one official terminus and
+        exactly one live destination remain unmatched, they're paired by
+        elimination and the live text is stored as an *alias* alongside the
+        official terminus — so the entry keeps working both during a
+        disruption (matches the alias) and after service returns to normal
+        (matches the official terminus directly), without reconfiguration.
+        Anything left ambiguous (more than one unmatched on either side)
+        falls back to a single unfiltered "beide Richtungen" entry for that
+        line, rather than offering a direction filter that might never match.
         """
-        lines = await self._serving_lines_via_api(stop_id)
-        if lines:
-            return lines
-        _LOGGER.debug(
-            "SERVINGLINES returned nothing for %s, falling back to DM sampling", stop_id
-        )
-        return await self._serving_lines_via_dm(stop_id)
+        api_lines = await self._serving_lines_via_api(stop_id)
+        dm_lines = await self._serving_lines_via_dm(stop_id)
+
+        if not api_lines:
+            # No SERVINGLINES support at all — DM sampling is all we have.
+            return dm_lines
+
+        api_by_line: dict[str, list[dict]] = {}
+        for line in api_lines:
+            api_by_line.setdefault(line["global_id"], []).append(line)
+
+        dm_by_line: dict[str, list[dict]] = {}
+        for line in dm_lines:
+            dm_by_line.setdefault(line["global_id"], []).append(line)
+
+        result: list[dict] = []
+        seen_keys: set[tuple[str, str]] = set()
+
+        def _add(gid: str, name: str, line_full: str, destination: str, label: str, aliases: list[str] | None = None) -> None:
+            key = (gid, destination)
+            if key in seen_keys:
+                return
+            seen_keys.add(key)
+            entry = {
+                "global_id": gid,
+                "name": name,
+                "line_full": line_full,
+                "destination": destination,
+                "label": label,
+            }
+            if aliases:
+                entry["destination_aliases"] = aliases
+            result.append(entry)
+
+        for gid, official_entries in api_by_line.items():
+            name = official_entries[0]["name"]
+            line_full = official_entries[0]["line_full"]
+            official_dests = [e["destination"] for e in official_entries if e["destination"]]
+            live_dests = [c["destination"] for c in dm_by_line.get(gid, []) if c["destination"]]
+
+            matched_official: set[str] = set()
+            matched_live: set[str] = set()
+            for off in official_dests:
+                for live in live_dests:
+                    if _destination_matches(off, live):
+                        matched_official.add(off)
+                        matched_live.add(live)
+
+            unmatched_official = [d for d in official_dests if d not in matched_official]
+            unmatched_live = [d for d in live_dests if d not in matched_live]
+
+            aliases_by_official: dict[str, list[str]] = {}
+            if len(unmatched_official) == 1 and len(unmatched_live) == 1:
+                aliases_by_official[unmatched_official[0]] = [unmatched_live[0]]
+                matched_official.add(unmatched_official[0])
+                unmatched_official = []
+                unmatched_live = []
+
+            for off in official_dests:
+                if off in matched_official:
+                    _add(
+                        gid, name, line_full, off,
+                        label=f"{name} → {off}",
+                        aliases=aliases_by_official.get(off),
+                    )
+
+            if unmatched_official:
+                # Ambiguous leftovers (more than one on either side) — offer a
+                # single safe, non-direction-specific entry for this line
+                # instead of a direction filter that might never match.
+                _add(gid, name, line_full, "", label=f"{name} (beide Richtungen, unbestätigt)")
+
+            # Live destinations that don't correspond to any official terminus
+            # at all (e.g. a genuine extra branch/short-turn service) — these
+            # were actually observed, so they're safe to offer directly.
+            for live in unmatched_live:
+                _add(gid, name, line_full, live, label=f"{name} → {live}")
+
+        # Lines DM sampling found that SERVINGLINES didn't mention at all
+        # (rare, but keeps the list complete).
+        for gid, dm_entries in dm_by_line.items():
+            if gid in api_by_line:
+                continue
+            for c in dm_entries:
+                _add(gid, c["name"], c["line_full"], c["destination"], label=c["label"])
+
+        return _sort_lines(result)
 
     async def _serving_lines_via_api(self, stop_id: str) -> list[dict]:
         """Use XML_SERVINGLINES_REQUEST to get all lines at a stop."""
@@ -527,7 +672,7 @@ class EFAApiClient:
             _LOGGER.debug("SERVINGLINES request failed: %s", exc)
             return []
 
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         lines: list[dict] = []
 
         # rapidJSON SERVINGLINES response: list under "lines" or "transportation"
@@ -543,18 +688,23 @@ class EFAApiClient:
             if not name:
                 continue
 
-            dedup_key = global_id if global_id else name
+            line_key = global_id if global_id else name
+            destination = transport.get("destination", {}).get("name", "")
+
+            # Dedup on (line, destination) — the same line can run in several
+            # directions, and those are distinct, separately-selectable entries.
+            dedup_key = (line_key, destination)
             if dedup_key in seen:
                 continue
             seen.add(dedup_key)
 
-            destination = transport.get("destination", {}).get("name", "")
             type_part = line_full.replace(name, "").strip() if line_full != name else ""
-            label = f"{name} ({type_part})" if type_part else name
+            base_label = f"{name} ({type_part})" if type_part else name
+            label = f"{base_label} → {destination}" if destination else base_label
 
             lines.append(
                 {
-                    "global_id": dedup_key,
+                    "global_id": line_key,
                     "name": name,
                     "line_full": line_full,
                     "destination": destination,
@@ -608,25 +758,30 @@ class EFAApiClient:
 
         results = await _asyncio.gather(*[_fetch_at_offset(o) for o in offsets_minutes])
 
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         lines: list[dict] = []
         for batch in results:
             for dep in batch:
                 name = dep.get("line", "")
                 global_id = dep.get("global_id", "")
-                dedup_key = global_id if global_id else name
-                if not dedup_key or dedup_key in seen:
+                line_key = global_id if global_id else name
+                destination = dep.get("destination", "")
+                if not line_key:
+                    continue
+                dedup_key = (line_key, destination)
+                if dedup_key in seen:
                     continue
                 seen.add(dedup_key)
                 line_full = dep.get("line_full", name)
                 type_part = line_full.replace(name, "").strip() if line_full != name else ""
-                label = f"{name} ({type_part})" if type_part else name
+                base_label = f"{name} ({type_part})" if type_part else name
+                label = f"{base_label} → {destination}" if destination else base_label
                 lines.append(
                     {
-                        "global_id": dedup_key,
+                        "global_id": line_key,
                         "name": name,
                         "line_full": line_full,
-                        "destination": dep.get("destination", ""),
+                        "destination": destination,
                         "label": label,
                     }
                 )
@@ -636,15 +791,35 @@ class EFAApiClient:
     async def get_departures(
         self,
         stop_id: str,
-        limit: int = 10,
-        line_filter: list[str] | None = None,
+        direction_filters: list[dict],
         priority_filter: list[str] | None = None,
         type_filter: list[str] | None = None,
     ) -> dict[str, Any]:
         """
-        Fetch departures for a stop.
-        Returns {departures: [...], disruptions: [...]}.
+        Fetch departures for a stop and bucket them per configured
+        "Linie + Richtung" entry, so every selection gets its own reserved
+        slots instead of competing for spots in one shared chronological feed.
+
+        direction_filters: list of entries as described in const.py —
+            {"key", "line_global_id", "line_name", "destination", "count"}.
+            An entry with line_global_id=None is the legacy "alle Linien"
+            sentinel (no filtering at all, old behaviour).
+
+        Returns {buckets: {key: [departure, ...]}, disruptions: [...]}.
         """
+        entries = direction_filters or []
+        total_requested = sum(max(int(e.get("count", 0)), 0) for e in entries) or 10
+        has_specific_filter = any(e.get("line_global_id") for e in entries)
+
+        # A single combined raw request underpins all buckets. When specific
+        # lines are selected we look further ahead so that rarely-departing
+        # lines still have a chance to show up in the raw window; unfiltered
+        # ("alle Linien") setups keep the old, cheaper window size.
+        if has_specific_filter:
+            fetch_limit = min(max(total_requested * 15, 90), 300)
+        else:
+            fetch_limit = min(max(total_requested * 3, 15), 100)
+
         params = {
             "language": "de",
             "outputFormat": "rapidJSON",
@@ -653,7 +828,7 @@ class EFAApiClient:
             "deleteAssignedStopps_dm": "1",
             "useRealtime": "1",
             "mode": "direct",
-            "limit": str(limit),
+            "limit": str(fetch_limit),
             "version": "10.5.17.3",
         }
         try:
@@ -669,22 +844,93 @@ class EFAApiClient:
             raise
 
         raw_events = data.get("stopEvents", [])
-        active_filter = line_filter or []
 
-        departures = []
+        buckets: dict[str, list[dict]] = {e["key"]: [] for e in entries}
+        # For diagnostics: every live destination text seen per line globalId,
+        # so we can log what was actually available if a direction filter
+        # never finds a match.
+        seen_destinations_by_line: dict[str, set[str]] = {}
+
         for event in raw_events:
             transport = event.get("transportation", {})
             gid = transport.get("globalId", "")
             line_name = transport.get("disassembledName") or transport.get("number", "")
-            filter_key = gid if gid else line_name
-            if active_filter and filter_key not in active_filter:
+            line_key = gid if gid else line_name
+            destination = transport.get("destination", {}).get("name", "")
+
+            if destination:
+                seen_destinations_by_line.setdefault(line_key, set()).add(destination)
+
+            parsed: dict | None = None  # lazily parsed, only if it matches something
+
+            for entry in entries:
+                bucket = buckets[entry["key"]]
+                entry_count = max(int(entry.get("count", 0)), 0)
+                if len(bucket) >= entry_count:
+                    continue  # this bucket is already full
+
+                entry_line = entry.get("line_global_id")
+                entry_dest = entry.get("destination")
+                entry_aliases = entry.get("destination_aliases", [])
+
+                if entry_line is None:
+                    matches = True  # legacy "alle Linien" sentinel — no filter
+                elif entry_line != line_key:
+                    matches = False
+                elif entry_dest is None:
+                    matches = True  # line selected, both directions allowed
+                else:
+                    matches = _destination_matches_any(entry_dest, entry_aliases, destination)
+
+                if not matches:
+                    continue
+
+                if parsed is None:
+                    parsed = _parse_departure(event)
+                    if parsed is None:
+                        break
+                bucket.append(parsed)
+
+        # Diagnostics: warn (once per update) about direction filters that
+        # found nothing, showing what destinations *were* seen for that line —
+        # this is the fastest way to spot a text mismatch between SERVINGLINES
+        # and the live DM feed for a specific direction.
+        for entry in entries:
+            if entry.get("line_global_id") is None:
                 continue
-            parsed = _parse_departure(event)
-            if parsed:
-                departures.append(parsed)
+            if buckets[entry["key"]]:
+                continue
+            configured_dest = entry.get("destination")
+            if configured_dest is None:
+                continue  # "both directions" entries aren't direction-specific
+            live_seen = seen_destinations_by_line.get(entry["line_global_id"])
+            if live_seen:
+                _LOGGER.warning(
+                    "EFA Departures: '%s → %s' fand keine Übereinstimmung. "
+                    "Live gesehene Ziele für diese Linie an dieser Haltestelle: %s",
+                    entry.get("line_name", entry["line_global_id"]),
+                    configured_dest,
+                    sorted(live_seen),
+                )
+            else:
+                _LOGGER.debug(
+                    "EFA Departures: '%s → %s' — Linie kam im aktuellen "
+                    "Abfrage-Fenster gar nicht vor (fetch_limit=%s).",
+                    entry.get("line_name", entry["line_global_id"]),
+                    configured_dest,
+                    fetch_limit,
+                )
+
+        # Legacy line_filter shape for disruption matching: any specifically
+        # selected line stays restricted; presence of the "alle Linien"
+        # sentinel means no restriction at all (matches old empty-filter behaviour).
+        if has_specific_filter and not any(e.get("line_global_id") is None for e in entries):
+            active_filter = [e["line_global_id"] for e in entries if e.get("line_global_id")]
+        else:
+            active_filter = []
 
         disruptions = _parse_disruptions(
             raw_events, active_filter, priority_filter, type_filter
         )
 
-        return {"departures": departures, "disruptions": disruptions}
+        return {"buckets": buckets, "disruptions": disruptions}
