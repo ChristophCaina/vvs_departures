@@ -1,7 +1,7 @@
 {
   "domain": "vvs_departures",
   "name": "EFA Departures",
-  "version": "2.0.0",
+  "version": "3.0.0-beta1",
   "config_flow": true,
   "documentation": "https://github.com/ChristophCaina/vvs_departures",
   "issue_tracker": "https://github.com/ChristophCaina/vvs_departures/issues",
