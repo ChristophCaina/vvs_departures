@@ -410,6 +410,11 @@ class EFAApiClient:
     def __init__(self, session: aiohttp.ClientSession, base_url: str) -> None:
         self._session = session
         self._base_url = base_url.rstrip("/")
+        # Direction filters currently without a live match, keyed by entry
+        # key → every live destination seen for that line during the episode.
+        # Used to log a mismatch once (and again only when new destinations
+        # show up) instead of on every single poll.
+        self._unmatched: dict[str, set[str]] = {}
 
     @property
     def stopfinder_url(self) -> str:
@@ -840,7 +845,12 @@ class EFAApiClient:
                 resp.raise_for_status()
                 data = await resp.json(content_type=None)
         except Exception as exc:
-            _LOGGER.error("Departure fetch failed for stop %s: %s", stop_id, exc)
+            # No error log here: the coordinator turns this into UpdateFailed,
+            # and HA's DataUpdateCoordinator already logs the first failure
+            # (and the recovery) itself. Logging here too only doubled it.
+            _LOGGER.debug(
+                "Departure fetch failed for stop %s: %s", stop_id, describe_exception(exc)
+            )
             raise
 
         raw_events = data.get("stopEvents", [])
@@ -891,35 +901,9 @@ class EFAApiClient:
                         break
                 bucket.append(parsed)
 
-        # Diagnostics: warn (once per update) about direction filters that
-        # found nothing, showing what destinations *were* seen for that line —
-        # this is the fastest way to spot a text mismatch between SERVINGLINES
-        # and the live DM feed for a specific direction.
-        for entry in entries:
-            if entry.get("line_global_id") is None:
-                continue
-            if buckets[entry["key"]]:
-                continue
-            configured_dest = entry.get("destination")
-            if configured_dest is None:
-                continue  # "both directions" entries aren't direction-specific
-            live_seen = seen_destinations_by_line.get(entry["line_global_id"])
-            if live_seen:
-                _LOGGER.warning(
-                    "EFA Departures: '%s → %s' fand keine Übereinstimmung. "
-                    "Live gesehene Ziele für diese Linie an dieser Haltestelle: %s",
-                    entry.get("line_name", entry["line_global_id"]),
-                    configured_dest,
-                    sorted(live_seen),
-                )
-            else:
-                _LOGGER.debug(
-                    "EFA Departures: '%s → %s' — Linie kam im aktuellen "
-                    "Abfrage-Fenster gar nicht vor (fetch_limit=%s).",
-                    entry.get("line_name", entry["line_global_id"]),
-                    configured_dest,
-                    fetch_limit,
-                )
+        self._log_direction_mismatches(
+            stop_id, entries, buckets, seen_destinations_by_line, fetch_limit
+        )
 
         # Legacy line_filter shape for disruption matching: any specifically
         # selected line stays restricted; presence of the "alle Linien"
@@ -934,3 +918,94 @@ class EFAApiClient:
         )
 
         return {"buckets": buckets, "disruptions": disruptions}
+
+    def _log_direction_mismatches(
+        self,
+        stop_id: str,
+        entries: list[dict],
+        buckets: dict[str, list[dict]],
+        seen_destinations_by_line: dict[str, set[str]],
+        fetch_limit: int,
+    ) -> None:
+        """
+        Diagnostics for direction filters that found nothing.
+
+        Showing which destinations *were* seen for the line is the fastest way
+        to spot a text mismatch between SERVINGLINES and the live DM feed — but
+        during construction work a direction can stay empty for weeks, so this
+        warns once per "mismatch episode" and repeats only when a destination
+        shows up that wasn't reported yet. Every other poll logs at debug.
+        When the filter matches again, one info line closes the episode.
+        """
+        active_keys = {e["key"] for e in entries}
+        # Drop state for entries that were removed via the options flow.
+        for key in list(self._unmatched):
+            if key not in active_keys:
+                del self._unmatched[key]
+
+        for entry in entries:
+            key = entry["key"]
+            line_id = entry.get("line_global_id")
+            configured_dest = entry.get("destination")
+            if line_id is None or configured_dest is None:
+                continue  # unfiltered / "both directions" entries aren't direction-specific
+            label = entry.get("line_name", line_id)
+
+            if buckets[key]:
+                if key in self._unmatched:
+                    del self._unmatched[key]
+                    _LOGGER.info(
+                        "EFA Departures: '%s → %s' (Haltestelle %s) findet wieder Abfahrten.",
+                        label,
+                        configured_dest,
+                        stop_id,
+                    )
+                continue
+
+            live_seen = seen_destinations_by_line.get(line_id)
+            if not live_seen:
+                _LOGGER.debug(
+                    "EFA Departures: '%s → %s' — Linie kam im aktuellen "
+                    "Abfrage-Fenster gar nicht vor (fetch_limit=%s).",
+                    label,
+                    configured_dest,
+                    fetch_limit,
+                )
+                continue
+
+            already_reported = self._unmatched.get(key)
+            if already_reported is not None and live_seen <= already_reported:
+                _LOGGER.debug(
+                    "EFA Departures: '%s → %s' weiterhin ohne Übereinstimmung, live: %s",
+                    label,
+                    configured_dest,
+                    sorted(live_seen),
+                )
+                continue
+
+            reported = (already_reported or set()) | live_seen
+            self._unmatched[key] = reported
+            _LOGGER.warning(
+                "EFA Departures: '%s → %s' (Haltestelle %s) fand keine Übereinstimmung. "
+                "Live gesehene Ziele für diese Linie: %s. Das kann an Bauarbeiten/"
+                "Kurzwenden liegen; weitere Meldungen erst bei neuen Zielen oder "
+                "wenn die Richtung wieder Abfahrten findet.",
+                label,
+                configured_dest,
+                stop_id,
+                sorted(reported),
+            )
+
+
+def describe_exception(exc: BaseException) -> str:
+    """
+    Readable text for an exception, also when str(exc) is empty.
+
+    aiohttp/asyncio timeouts stringify to "", which used to produce log lines
+    ending in a bare colon ("Departure fetch failed for stop …: ").
+    """
+    if isinstance(exc, TimeoutError):
+        return "Zeitüberschreitung bei der Anfrage (TimeoutError)"
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
