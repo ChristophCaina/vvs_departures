@@ -9,7 +9,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import EFAApiClient
+from .api import EFAApiClient, describe_exception
 from .const import (
     CONF_DISRUPTION_PRIORITIES,
     CONF_DISRUPTION_TYPES,
@@ -63,6 +63,8 @@ class EFADeparturesCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 type_filter=self._type_filter if self._type_filter else None,
             )
         except Exception as exc:
-            raise UpdateFailed(f"Error communicating with EFA API: {exc}") from exc
+            raise UpdateFailed(
+                f"Error communicating with EFA API: {describe_exception(exc)}"
+            ) from exc
 
         return result
