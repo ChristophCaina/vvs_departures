@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.0.0-beta3] - 2026-11-15
 
 ### Changed
 - Warnung „fand keine Übereinstimmung“ wird nicht mehr bei jedem Abruf geloggt, sondern einmal pro Ausfall-Episode einer Richtung; erneut nur, wenn neue Live-Ziele auftauchen. Sobald die Richtung wieder Abfahrten findet, erscheint eine Info-Meldung. Die Meldung enthält jetzt die Haltestellen-ID.
